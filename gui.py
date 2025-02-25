@@ -25,34 +25,38 @@ class GRBLController(QWidget):
 
         self.serial_port = None
         self.sending = False
+        self.paused = False
         self.connected = False
         self.gcode_lines = []
         self.coordinates = [(0, 0)]
-        self.glued_coordinates = []
+        self.glued_coordinates = [(0,0)]
         self.thread = None
         self.comm = Communicator()
         self.comm.update_status.connect(self.update_status)
         self.x_coords = []
         self.y_coords = []
+        self.glued_x_coords = []
+        self.glued_y_coords = []
         self.init_ui()
         self.scan_ports()
 
     def init_ui(self):
         layout = QVBoxLayout()
 
-        # Set layout margins and spacing to zero to minimize wasted space
-        layout.setContentsMargins(0, 0, 0, 0)  # Left, Top, Right, Bottom margins
-        layout.setSpacing(5)  # Minimal spacing between widgets
-
         # Status label at the top
         self.status_label = QLabel("Status: Idle")
+        self.status_label.setStyleSheet("""
+            font-size: 18px; 
+            font-weight: bold; 
+            color: white; 
+            background-color: #2e3a47;
+            padding: 10px;
+            border-radius: 5px;
+        """)
         layout.addWidget(self.status_label)
 
         # Port selection and connection controls
         port_layout = QHBoxLayout()
-        port_layout.setContentsMargins(0, 0, 0, 0)  # Minimize margins in the port layout
-        port_layout.setSpacing(5)
-
         self.port_selector = QComboBox()
         port_layout.addWidget(self.port_selector)
 
@@ -70,12 +74,7 @@ class GRBLController(QWidget):
         # Matplotlib Figure and Canvas
         self.figure = Figure()
         self.canvas = FigureCanvas(self.figure)
-
-        # Adjust the figure layout to minimize padding
         self.figure.subplots_adjust(left=0.05, right=0.95, bottom=0.05, top=0.95)
-
-        # Add the canvas to the layout with a stretch factor of 1
-        # This ensures the plot takes up most of the available space
         layout.addWidget(self.canvas, stretch=1)
 
         # Load G-code file button
@@ -84,11 +83,24 @@ class GRBLController(QWidget):
         self.load_button.clicked.connect(self.load_file)
         layout.addWidget(self.load_button)
 
-        # Start/Stop Sending button
+        # Start/Stop/Pause buttons
+        button_layout = QHBoxLayout()
+        
         self.start_button = QPushButton("Start Sending")
-        self.start_button.clicked.connect(self.toggle_sending)
-        self.start_button.setEnabled(False)
-        layout.addWidget(self.start_button)
+        self.start_button.clicked.connect(self.start_sending)
+        button_layout.addWidget(self.start_button)
+
+        self.pause_button = QPushButton("Pause")
+        self.pause_button.clicked.connect(self.toggle_pause)
+        self.pause_button.setEnabled(False)  # Initially disabled
+        button_layout.addWidget(self.pause_button)
+
+        self.stop_button = QPushButton("Stop")
+        self.stop_button.clicked.connect(self.stop_sending)
+        self.stop_button.setEnabled(False)  # Initially disabled
+        button_layout.addWidget(self.stop_button)
+
+        layout.addLayout(button_layout)
 
         # Set the layout for the main window
         self.setLayout(layout)
@@ -139,13 +151,12 @@ class GRBLController(QWidget):
         if file_path:
             self.gcode_lines = self.parse_gcode(file_path)
             self.update_status("G-code file loaded and parsed.")
-            self.plot_toolpath()
+            self.plot_toolpath()  # Plot the original toolpath
             if self.connected:
-                self.start_button.setEnabled(True)
-                
+                self.start_button.setEnabled(True)  # Enable Start button after file load
+
     def parse_gcode(self, file_path):
         code_lines = []
-        # Append the origin (0, 0) as the starting point
         self.x_coords.append(0.0)
         self.y_coords.append(0.0)
 
@@ -181,56 +192,60 @@ class GRBLController(QWidget):
         return code_lines
 
     def plot_toolpath(self, pointcolor='lightgray'):
-        # Ensure the background plot is created only once
-        if not hasattr(self, 'ax'):
-            self.ax = self.figure.add_subplot(111)
+        self.figure.clear()
+        ax = self.figure.add_subplot(111)
 
+        # Plot the original toolpath
         if self.coordinates:
             x_vals, y_vals = zip(*self.coordinates)
+            ax.plot(x_vals, y_vals, linestyle='--', color=pointcolor, label='Toolpath')
+            ax.scatter(x_vals, y_vals, color=pointcolor, s=50)
 
-            # Plot the toolpath in light gray as the background
-            self.ax.plot(x_vals, y_vals, linestyle='-', color=pointcolor, label='Toolpath')  
-            self.ax.scatter(x_vals, y_vals, color=pointcolor, s=50)  
-
-            self.ax.set_xlim(-50, 1200)  # X-axis range
-            self.ax.set_ylim(-50, 350)   # Y-axis range
-            self.ax.set_xlabel("X Axis")
-            self.ax.set_ylabel("Y Axis")
-            self.ax.set_title("G-code Toolpath Visualization")
-            self.ax.grid(True)
-            self.ax.set_aspect('equal', adjustable='box')  
-
-        self.canvas.draw()
-
-    def plot_glued_toolpath(self):
-        # No need to clear the axes, we just add to the existing one
+        # Plot the glued toolpath if available
         if self.glued_coordinates:
-            x_vals, y_vals = zip(*self.glued_coordinates)
+            glued_x_vals, glued_y_vals = zip(*self.glued_coordinates)
+            ax.plot(glued_x_vals, glued_y_vals, linestyle='-', color='red', label='Glued Toolpath')
+            ax.scatter(glued_x_vals, glued_y_vals, color='red', s=50)
 
-            # Plot the glued toolpath in red (foreground)
-            self.ax.plot(x_vals, y_vals, linestyle='-', color='red', label='Glued Toolpath')  
-            self.ax.scatter(x_vals, y_vals, color='red', s=50)
-
-            self.ax.set_xlim(-50, 1200)  # X-axis range
-            self.ax.set_ylim(-50, 350)   # Y-axis range
-            self.ax.set_xlabel("X Axis")
-            self.ax.set_ylabel("Y Axis")
-            self.ax.set_title("G-code Toolpath Visualization (Glued)")
-            self.ax.grid(True)
-            self.ax.set_aspect('equal', adjustable='box')
+        ax.set_xlim(-50, 1200)
+        ax.set_ylim(-50, 350)
+        ax.set_xlabel("X Axis")
+        ax.set_ylabel("Y Axis")
+        ax.set_title("G-code Toolpath Visualization")
+        ax.grid(True)
+        ax.set_aspect('equal', adjustable='box')
 
         self.canvas.draw()
 
-    def toggle_sending(self):
-        if self.sending:
-            self.sending = False
-            self.start_button.setText("Start Sending")
-            self.update_status("Sending stopped.")
+    def toggle_pause(self):
+        if self.paused:
+            self.paused = False
+            self.update_status("Resumed sending G-code.")
         else:
-            self.sending = True
-            self.start_button.setText("Stop Sending")
-            self.thread = threading.Thread(target=self.send_gcode)
-            self.thread.start()
+            self.paused = True
+            self.update_status("Paused sending G-code.")
+
+    def stop_sending(self):
+        self.sending = False
+        self.paused = False
+        self.start_button.setEnabled(True)
+        self.update_status("G-code sending stopped.")
+        self.pause_button.setEnabled(False)
+        self.stop_button.setEnabled(False)
+
+    def start_sending(self):
+        if not self.connected:
+            self.update_status("Not connected to the device.")
+            return
+
+        self.sending = True
+        self.paused = False
+        self.start_button.setEnabled(False)
+        self.pause_button.setEnabled(True)
+        self.stop_button.setEnabled(True)
+
+        self.thread = threading.Thread(target=self.send_gcode)
+        self.thread.start()
 
     def send_gcode(self):
         if not self.serial_port:
@@ -238,22 +253,24 @@ class GRBLController(QWidget):
             return
 
         is_relative = False
-        self.coordinates = [(0, 0)]
+        self.glued_coordinates = []
         self.update_status("Started sending G-code.")
-        print("Sending G-code...")
+
         for line in self.gcode_lines:
-            print(line)
             if not self.sending:
                 break
-            
+
+            if self.paused:
+                while self.paused:
+                    time.sleep(0.1)
+
             line = line.strip().upper()
 
             if 'G90' in line:
                 is_relative = False
             elif 'G91' in line:
                 is_relative = True
-            
-            # If it's a movement command, update the plot with the new position
+
             command_pattern = re.compile(r'G(\d+)(?:X([-.\d]+))?(?:Y([-.\d]+))?')
             if line.startswith('G0') or line.startswith('G1'):
                 match = command_pattern.search(line)
@@ -268,25 +285,23 @@ class GRBLController(QWidget):
                     if match.group(3) is not None:
                         y = y
 
+                # Store coordinates for both original and glued toolpath
                 self.coordinates.append((x, y))
+                self.glued_coordinates.append((x, y))
 
             if line.startswith('M4'):
-                # Update the plot with the new coordinates
-                self.plot_toolpath(pointcolor='red')
+                self.plot_toolpath()
 
             self.serial_port.write((line + '\\n').encode())
             grbl_response = self.serial_port.readline().decode().strip()
-            # Only proceed if the response is not empty
-            if grbl_response:
-                print(f"Sent: {line} | Response: {grbl_response}")
-            else:
-                print(f"Sent: {line} | No response")
-
             self.comm.update_status.emit(f"Sent: {line} | Response: {grbl_response}")
 
         self.comm.update_status.emit("Finished sending G-code.")
-        self.start_button.setText("Start Sending")
+        self.start_button.setEnabled(True)
         self.sending = False
+        self.paused = False
+        self.pause_button.setEnabled(False)
+        self.stop_button.setEnabled(False)
 
     def update_status(self, message):
         self.status_label.setText(f"Status: {message}")
@@ -300,6 +315,5 @@ class GRBLController(QWidget):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = GRBLController()
-    # Open maximized
     window.showMaximized()
     sys.exit(app.exec_())

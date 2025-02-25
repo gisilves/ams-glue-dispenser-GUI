@@ -20,7 +20,8 @@ class Communicator(QObject):
 class GRBLController(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("GRBL G-code Sender with Enhanced Plot")
+            
+        self.setWindowTitle("AMS PG GLUE DISPENSER")
         self.resize(800, 600)
 
         self.serial_port = None
@@ -88,6 +89,7 @@ class GRBLController(QWidget):
         
         self.start_button = QPushButton("Start Sending")
         self.start_button.clicked.connect(self.start_sending)
+        self.start_button.setEnabled(False)  # Initially disabled
         button_layout.addWidget(self.start_button)
 
         self.pause_button = QPushButton("Pause")
@@ -192,28 +194,41 @@ class GRBLController(QWidget):
         return code_lines
 
     def plot_toolpath(self, pointcolor='lightgray'):
-        self.figure.clear()
-        ax = self.figure.add_subplot(111)
+        # Ensure the background plot is created only once
+        if not hasattr(self, 'ax'):
+            self.ax = self.figure.add_subplot(111)
 
-        # Plot the original toolpath
         if self.coordinates:
             x_vals, y_vals = zip(*self.coordinates)
-            ax.plot(x_vals, y_vals, linestyle='--', color=pointcolor, label='Toolpath')
-            ax.scatter(x_vals, y_vals, color=pointcolor, s=50)
+            self.ax.plot(x_vals, y_vals, linestyle='--', color=pointcolor, label='Toolpath')
+            self.ax.scatter(x_vals, y_vals, color=pointcolor, s=50)
 
-        # Plot the glued toolpath if available
+        self.ax.set_xlim(-50, 1200)
+        self.ax.set_ylim(-50, 350)
+        self.ax.set_xlabel("X Axis")
+        self.ax.set_ylabel("Y Axis")
+        self.ax.set_title("G-code Toolpath Visualization")
+        self.ax.grid(True)
+        self.ax.set_aspect('equal', adjustable='box')
+
+        self.canvas.draw()
+
+    def plot_glued_toolpath(self):
+        # No need to clear the axes, we just add to the existing one
         if self.glued_coordinates:
-            glued_x_vals, glued_y_vals = zip(*self.glued_coordinates)
-            ax.plot(glued_x_vals, glued_y_vals, linestyle='-', color='red', label='Glued Toolpath')
-            ax.scatter(glued_x_vals, glued_y_vals, color='red', s=50)
+            x_vals, y_vals = zip(*self.glued_coordinates)
 
-        ax.set_xlim(-50, 1200)
-        ax.set_ylim(-50, 350)
-        ax.set_xlabel("X Axis")
-        ax.set_ylabel("Y Axis")
-        ax.set_title("G-code Toolpath Visualization")
-        ax.grid(True)
-        ax.set_aspect('equal', adjustable='box')
+            # Plot the glued toolpath in red (foreground)
+            self.ax.plot(x_vals, y_vals, linestyle='-', color='red', label='Glued Toolpath')  
+            self.ax.scatter(x_vals, y_vals, color='red', s=50)
+
+            self.ax.set_xlim(-50, 1200)  # X-axis range
+            self.ax.set_ylim(-50, 350)   # Y-axis range
+            self.ax.set_xlabel("X Axis")
+            self.ax.set_ylabel("Y Axis")
+            self.ax.set_title("G-code Toolpath Visualization (Glued)")
+            self.ax.grid(True)
+            self.ax.set_aspect('equal', adjustable='box')
 
         self.canvas.draw()
 
@@ -290,7 +305,7 @@ class GRBLController(QWidget):
                 self.glued_coordinates.append((x, y))
 
             if line.startswith('M4'):
-                self.plot_toolpath()
+                self.plot_glued_toolpath()
 
             self.serial_port.write((line + '\\n').encode())
             grbl_response = self.serial_port.readline().decode().strip()

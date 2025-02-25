@@ -259,7 +259,7 @@ class GRBLController(QWidget):
         self.pause_button.setEnabled(True)
         self.stop_button.setEnabled(True)
 
-        self.thread = threading.Thread(target=self.send_gcode)
+        self.thread = threading.Thread(target=self.send_gcode_blocking)
         self.thread.start()
 
     def send_gcode(self):
@@ -307,8 +307,10 @@ class GRBLController(QWidget):
             if line.startswith('M4'):
                 self.plot_glued_toolpath()
 
-            self.serial_port.write((line + '\\n').encode())
-            grbl_response = self.serial_port.readline().decode().strip()
+            self.serial_port.write((line + '\n').encode())
+            time.sleep(0.1)
+            grbl_response = self.serial_port.readline()
+            print(f"Sent: {line} | Response: {grbl_response}")
             self.comm.update_status.emit(f"Sent: {line} | Response: {grbl_response}")
 
         self.comm.update_status.emit("Finished sending G-code.")
@@ -317,6 +319,66 @@ class GRBLController(QWidget):
         self.paused = False
         self.pause_button.setEnabled(False)
         self.stop_button.setEnabled(False)
+
+    def send_gcode_blocking(self):
+        if not self.serial_port:
+            self.update_status("No serial connection.")
+            return
+
+        is_relative = False
+        self.coordinates = [(0, 0)]
+        self.update_status("Started sending G-code.")
+        print("Sending G-code...")
+        
+        for line in self.gcode_lines:
+            print(line)
+            if not self.sending:
+                break
+            
+            line = line.strip().upper()
+
+            # Check for G90 and G91 commands (absolute or relative positioning)
+            if 'G90' in line:
+                is_relative = False
+            elif 'G91' in line:
+                is_relative = True
+            
+            # If it's a movement command, update the plot with the new position
+            command_pattern = re.compile(r'G(\d+)(?:X([-.\d]+))?(?:Y([-.\d]+))?')
+            if line.startswith('G0') or line.startswith('G1'):
+                match = command_pattern.search(line)
+                x = float(match.group(2)) if match.group(2) else 0.0
+                y = float(match.group(3)) if match.group(3) else 0.0
+                if is_relative:
+                    x += self.coordinates[-1][0]
+                    y += self.coordinates[-1][1]
+                else:
+                    if match.group(2) is not None:
+                        x = x
+                    if match.group(3) is not None:
+                        y = y
+
+                self.coordinates.append((x, y))
+
+            if line.startswith('M4'):
+                # Update the plot with the new coordinates
+                self.plot_toolpath(pointcolor='red')
+
+            grbl_response = ''
+
+            while grbl_response != 'ok':
+                # Send the G-code line to GRBL
+                self.serial_port.write((line + '\n').encode())
+                time.sleep(0.1)
+                # Wait for the response from GRBL
+                grbl_response = self.serial_port.readline().decode().strip()
+                print(f"Sent: {line} | Response: {grbl_response}")
+                self.comm.update_status.emit(f"Sent: {line} | Response: {grbl_response}")
+
+        self.comm.update_status.emit("Finished sending G-code.")
+        self.start_button.setText("Start Sending")
+        self.sending = False
+
 
     def update_status(self, message):
         self.status_label.setText(f"Status: {message}")

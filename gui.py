@@ -6,12 +6,14 @@ from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QPushButton,
     QFileDialog, QLabel, QComboBox, QHBoxLayout, QMessageBox
 )
+from PyQt5.QtGui import QIcon
 from PyQt5.QtCore import pyqtSignal, QObject
+import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import serial
 import serial.tools.list_ports
-
+import ctypes
 
 class Communicator(QObject):
     update_status = pyqtSignal(str)
@@ -28,16 +30,11 @@ class GRBLController(QWidget):
         self.sending = False
         self.paused = False
         self.connected = False
-        self.gcode_lines = []
         self.coordinates = [(0, 0)]
         self.glued_coordinates = [(0,0)]
         self.thread = None
         self.comm = Communicator()
         self.comm.update_status.connect(self.update_status)
-        self.x_coords = []
-        self.y_coords = []
-        self.glued_x_coords = []
-        self.glued_y_coords = []
         self.init_ui()
         self.scan_ports()
 
@@ -78,11 +75,38 @@ class GRBLController(QWidget):
         self.figure.subplots_adjust(left=0.05, right=0.95, bottom=0.05, top=0.95)
         layout.addWidget(self.canvas, stretch=1)
 
+        # Add an empty plot to the canvas
+        self.ax = self.figure.add_subplot(111)
+        # Disable the axes
+        self.ax.axis('off')
+
+        # Add 'logo.png' to the plot
+        self.ax.imshow(plt.imread('logo.png'))
+
+        
+
         # Load G-code file button
         self.load_button = QPushButton("Load G-code File")
         self.load_button.setEnabled(False)
         self.load_button.clicked.connect(self.load_file)
         layout.addWidget(self.load_button)
+
+
+        settings_layout = QHBoxLayout()
+
+        # Add a selection for the first block to send with a label
+        settings_layout.addWidget(QLabel("First Block:"))
+        self.first_block_selector = QComboBox()
+        settings_layout.addWidget(self.first_block_selector)
+        self.first_block_selector.setEnabled(False)  # Initially disabled
+
+        # Add a selection for the last block to send
+        settings_layout.addWidget(QLabel("Last Block:"))
+        self.last_block_selector = QComboBox()
+        settings_layout.addWidget(self.last_block_selector)
+        self.last_block_selector.setEnabled(False)
+
+        layout.addLayout(settings_layout)
 
         # Start/Stop/Pause buttons
         button_layout = QHBoxLayout()
@@ -151,50 +175,117 @@ class GRBLController(QWidget):
     def load_file(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Open G-code File", "", "G-code Files (*.gcode)")
         if file_path:
-            self.gcode_lines = self.parse_gcode(file_path)
+            self.coordinates = [(0, 0)]  # Reset coordinates
+            self.glued_coordinates = [(0, 0)]
+            self.parse_gcode(file_path)
             self.update_status("G-code file loaded and parsed.")
             if hasattr(self, 'ax'): # Clear plot if a file was previously loaded
                 self.ax.cla()
             self.plot_toolpath()  # Plot the original toolpath
             if self.connected:
                 self.start_button.setEnabled(True)  # Enable Start button after file load
+                self.first_block_selector.setEnabled(True)
+                self.last_block_selector.setEnabled(True)
 
     def parse_gcode(self, file_path):
-        code_lines = []
-        self.x_coords.append(0.0)
-        self.y_coords.append(0.0)
+        self.movement_type = []
+        self.toolpath = []  # List of {'x': ..., 'y': ..., 'glue_commands': [...]}
+        self.program_initialization = []  # Stores the init block
 
         current_x, current_y = 0.0, 0.0
         is_relative = False
+        in_init_block = False
+        in_glue_block = False
+        movement_type = '0'
+        current_glue_commands = []
+
         command_pattern = re.compile(r'G(\d+)(?:X([-.\d]+))?(?:Y([-.\d]+))?')
 
         with open(file_path, 'r') as file:
             for line in file:
-                code_lines.append(line)
-                line = line.strip().upper()
-                if 'G90' in line:
-                    is_relative = False
-                elif 'G91' in line:
-                    is_relative = True
+                line = line.strip()
 
-                matches = command_pattern.finditer(line)
-                for match in matches:
-                    x = float(match.group(2)) if match.group(2) else 0.0
-                    y = float(match.group(3)) if match.group(3) else 0.0
-                    if is_relative:
-                        current_x += x
-                        current_y += y
-                    else:
-                        if match.group(2) is not None:
+                if '; Program initialization' in line:
+                    in_init_block = True
+                    self.program_initialization = [line]
+                    continue
+                elif '; End of program initialization' in line:
+                    in_init_block = False
+                    self.program_initialization.append(line)
+                    continue
+
+                if in_init_block:
+                    self.program_initialization.append(line)
+                    if 'G90' in line:
+                        is_relative = False
+                    elif 'G91' in line:
+                        is_relative = True
+                    if 'G00' or 'G01' in line:
+                        x, y, movement_type = self.match_pattern(line, command_pattern)
+
+                        if is_relative:
+                            current_x += x
+                            current_y += y
+                        else:
                             current_x = x
-                        if match.group(3) is not None:
                             current_y = y
-                    self.x_coords.append(current_x)
-                    self.y_coords.append(current_y)
 
-        self.coordinates = list(zip(self.x_coords, self.y_coords))
-        return code_lines
+                        self.coordinates.append((current_x, current_y))
+                        self.movement_type.append(movement_type)
+                        
+                if "; ------- Glue deposition -------" in line:
+                    in_glue_block = True
+                    current_glue_commands = [line]
+                    continue
+                elif "; ------- End of glue deposition -------" in line:
+                    in_glue_block = False
+                    current_glue_commands.append(line)
+                    if self.coordinates:
+                        x, y = self.coordinates[-1]
+                        self.toolpath.append({'x': x, 'y': y, 'glue_commands': current_glue_commands.copy(), 'movement_type' : self.movement_type[-1]})
+                    current_glue_commands = []
+                    continue
 
+                if in_glue_block:
+                    current_glue_commands.append(line)
+
+
+                x, y, movement_type = self.match_pattern(line, command_pattern)
+
+                if is_relative:
+                    current_x += x
+                    current_y += y
+                else:
+                    current_x = x
+                    current_y = y
+
+                self.coordinates.append((current_x, current_y))
+                self.movement_type.append(movement_type)
+
+            # Update the first and last block selectors
+            self.first_block_selector.clear()
+            self.first_block_selector.addItems([str(i) for i in range(len(self.toolpath))])
+            self.first_block_selector.setCurrentIndex(0)
+
+            self.last_block_selector.clear()
+            self.last_block_selector.addItems([str(i) for i in range(len(self.toolpath))])
+            self.last_block_selector.setCurrentIndex(len(self.toolpath) - 1)
+                
+    def match_pattern(self, line, pattern):
+        x = 0.0
+        y = 0.0
+        movement_type = '0'
+        
+        matches = pattern.finditer(line.upper())
+        for match in matches:
+            x = float(match.group(2)) if match.group(2) else 0.0
+            y = float(match.group(3)) if match.group(3) else 0.0
+
+            if match.group(1) == '00' or match.group(1) == '01':
+                movement_type = match.group(1)
+    
+        return x, y, movement_type
+    
     def plot_toolpath(self, pointcolor='lightgray'):
         # Ensure the background plot is created only once
         if not hasattr(self, 'ax'):
@@ -205,8 +296,9 @@ class GRBLController(QWidget):
             self.ax.plot(x_vals, y_vals, linestyle='--', color=pointcolor, label='Toolpath')
             self.ax.scatter(x_vals, y_vals, color=pointcolor, s=50)
 
-        self.ax.set_xlim(-50, 1400)
-        self.ax.set_ylim(-50, 350)
+        self.ax.set_xlim(-50, max(x_vals) + 50)
+        self.ax.set_ylim(-50, max(y_vals) + 50)
+        
         self.ax.set_xlabel("X Axis")
         self.ax.set_ylabel("Y Axis")
         self.ax.set_title("G-code Toolpath Visualization")
@@ -267,78 +359,79 @@ class GRBLController(QWidget):
         self.thread.start()
 
     def send_gcode(self):
-        if not self.serial_port:
-            self.update_status("No serial connection.")
-            return
-
-        is_relative = False
-        self.coordinates = [(0, 0)]
-        self.update_status("Started sending G-code.")
-        print("Sending G-code...")
-
         try:
-            for line in self.gcode_lines:
+            # Send the program initialization block
+            self.comm.update_status.emit("Starting G-code transmission")
+            self.send_lines(self.program_initialization)
+            self.send_lines(["G90"])  # Ensure absolute positioning (coordinates are converted during parsing to absolute)
+
+            first_block = int(self.first_block_selector.currentText())
+            last_block = int(self.last_block_selector.currentText())
+            # Disable the first and last block selectors while sending
+            self.first_block_selector.setEnabled(False)
+            self.last_block_selector.setEnabled(False)
+
+            # Send each command block in the toolpath
+            for block in self.toolpath[first_block:last_block]:
                 if not self.sending:
                     break
-
-                if self.paused:
-                    while self.paused:
-                        time.sleep(0.1)
-
-                line = line.strip().upper()
-
-                if 'G90' in line:
-                    is_relative = False
-                elif 'G91' in line:
-                    is_relative = True
-
-                command_pattern = re.compile(r'G(\d+)(?:X([-.\d]+))?(?:Y([-.\d]+))?')
-                if line.startswith('G0') or line.startswith('G1'):
-                    match = command_pattern.search(line)
-                    x = float(match.group(2)) if match.group(2) else 0.0
-                    y = float(match.group(3)) if match.group(3) else 0.0
-
-                    if is_relative:
-                        x += self.coordinates[-1][0]
-                        y += self.coordinates[-1][1]
-
-                    self.coordinates.append((x, y))
-
-                try:
-                    self.serial_port.write((line + '\n').encode())
-                except (serial.SerialException, OSError) as e:
-                    self.comm.update_status.emit(f"Serial write error: {e}")
-                    self.sending = False
-                    self.disconnect_serial()
-                    return
-
-                self.comm.update_status.emit(f"Sent: {line}")
-                grbl_response = ""
-
-                while grbl_response != "ok":
-                    try:
-                        time.sleep(0.1)
-                        grbl_response = self.serial_port.readline().decode().strip()
-                    except (serial.SerialException, OSError) as e:
-                        self.comm.update_status.emit(f"Serial read error: {e}")
-                        self.sending = False
-                        self.disconnect_serial()
-                        return
-
-                print(f"Sent: {line} | Response: {grbl_response}")
-                self.comm.update_status.emit(f"Sent: {line} | Response: {grbl_response}")
-
-                if 'END OF GLUE DEPOSITION' in line:
-                    self.plot_toolpath(pointcolor='red')
+                while self.paused:
+                    time.sleep(0.1)
+                # Send movement command
+                self.send_lines([f"G{block['movement_type']} X{block['x']} Y{block['y']}"])
+                # Send glue deposition commands
+                self.send_lines(block['glue_commands'])
+                self.glued_coordinates.append((block['x'], block['y']))
+                self.plot_glued_toolpath()
 
             self.comm.update_status.emit("Finished sending G-code.")
-            self.start_button.setText("Start Sending")
+        except serial.SerialException as e:
+            self.comm.update_status.emit(f"Serial error: {e}")
             self.sending = False
-
         except Exception as e:
-            self.comm.update_status.emit(f"Unexpected error: {e}")
+            self.comm.update_status.emit(f"Error: {e}")
             self.sending = False
-            self.disconnect_serial()
+        finally:
+            self.comm.update_status.emit("Transmission stopped")
+            self.start_button.setEnabled(True)
+            self.pause_button.setEnabled(False)
+            self.stop_button.setEnabled(False)
+
+    def send_lines(self, lines):
+        for line in lines:
+            if not self.sending:
+                break
+            while self.paused:
+                time.sleep(0.1)
+
+            try:
+                self.serial_port.write((line + '\n').encode())
+                self.comm.update_status.emit(f"Sent: {line}")
+
+                while True:
+                    response = self.serial_port.readline().decode().strip()
+                    if response == 'ok':
+                        break
+                    time.sleep(0.1)
+
+            except serial.SerialException as e:
+                self.comm.update_status.emit(f"Serial error while sending: {e}")
+                self.sending = False
+                break
+            except Exception as e:
+                self.comm.update_status.emit(f"Error while sending: {e}")
+                self.sending = False
+                break
+
+    def print_lines(self, lines):
+        for line in lines:
+            if not self.sending:
+                break
+            while self.paused:
+                time.sleep(0.1)
+            print((line))
+            self.comm.update_status.emit(f"Sent: {line}")
+            time.sleep(1)
 
     def update_status(self, message):
         self.status_label.setText(f"Status: {message}")
@@ -361,4 +454,5 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = GRBLController()
     window.showMaximized()
+    window.setWindowIcon(QIcon('icon.png'))
     sys.exit(app.exec_())

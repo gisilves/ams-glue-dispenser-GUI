@@ -4,7 +4,7 @@ import time
 import re
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QPushButton,
-    QFileDialog, QLabel, QComboBox, QHBoxLayout
+    QFileDialog, QLabel, QComboBox, QHBoxLayout, QMessageBox
 )
 from PyQt5.QtCore import pyqtSignal, QObject
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -149,10 +149,12 @@ class GRBLController(QWidget):
         self.update_status("Disconnected from serial port.")
 
     def load_file(self):
-        file_path, _ = QFileDialog.getOpenFileName(self, "Open G-code File", "", "G-code Files (*.gcode *.nc *.txt)")
+        file_path, _ = QFileDialog.getOpenFileName(self, "Open G-code File", "", "G-code Files (*.gcode)")
         if file_path:
             self.gcode_lines = self.parse_gcode(file_path)
             self.update_status("G-code file loaded and parsed.")
+            if hasattr(self, 'ax'): # Clear plot if a file was previously loaded
+                self.ax.cla()
             self.plot_toolpath()  # Plot the original toolpath
             if self.connected:
                 self.start_button.setEnabled(True)  # Enable Start button after file load
@@ -203,7 +205,7 @@ class GRBLController(QWidget):
             self.ax.plot(x_vals, y_vals, linestyle='--', color=pointcolor, label='Toolpath')
             self.ax.scatter(x_vals, y_vals, color=pointcolor, s=50)
 
-        self.ax.set_xlim(-50, 1200)
+        self.ax.set_xlim(-50, 1400)
         self.ax.set_ylim(-50, 350)
         self.ax.set_xlabel("X Axis")
         self.ax.set_ylabel("Y Axis")
@@ -235,9 +237,11 @@ class GRBLController(QWidget):
     def toggle_pause(self):
         if self.paused:
             self.paused = False
+            self.pause_button.setStyleSheet("") 
             self.update_status("Resumed sending G-code.")
         else:
             self.paused = True
+            self.pause_button.setStyleSheet("background-color : yellow") 
             self.update_status("Paused sending G-code.")
 
     def stop_sending(self):
@@ -259,68 +263,10 @@ class GRBLController(QWidget):
         self.pause_button.setEnabled(True)
         self.stop_button.setEnabled(True)
 
-        self.thread = threading.Thread(target=self.send_gcode_blocking)
+        self.thread = threading.Thread(target=self.send_gcode)
         self.thread.start()
 
     def send_gcode(self):
-        if not self.serial_port:
-            self.update_status("No serial connection.")
-            return
-
-        is_relative = False
-        self.glued_coordinates = []
-        self.update_status("Started sending G-code.")
-
-        for line in self.gcode_lines:
-            if not self.sending:
-                break
-
-            if self.paused:
-                while self.paused:
-                    time.sleep(0.1)
-
-            line = line.strip().upper()
-
-            if 'G90' in line:
-                is_relative = False
-            elif 'G91' in line:
-                is_relative = True
-
-            command_pattern = re.compile(r'G(\d+)(?:X([-.\d]+))?(?:Y([-.\d]+))?')
-            if line.startswith('G0') or line.startswith('G1'):
-                match = command_pattern.search(line)
-                x = float(match.group(2)) if match.group(2) else 0.0
-                y = float(match.group(3)) if match.group(3) else 0.0
-                if is_relative:
-                    x += self.coordinates[-1][0]
-                    y += self.coordinates[-1][1]
-                else:
-                    if match.group(2) is not None:
-                        x = x
-                    if match.group(3) is not None:
-                        y = y
-
-                # Store coordinates for both original and glued toolpath
-                self.coordinates.append((x, y))
-                self.glued_coordinates.append((x, y))
-
-            if line.startswith('M4'):
-                self.plot_glued_toolpath()
-
-            self.serial_port.write((line + '\n').encode())
-            time.sleep(0.1)
-            grbl_response = self.serial_port.readline()
-            print(f"Sent: {line} | Response: {grbl_response}")
-            self.comm.update_status.emit(f"Sent: {line} | Response: {grbl_response}")
-
-        self.comm.update_status.emit("Finished sending G-code.")
-        self.start_button.setEnabled(True)
-        self.sending = False
-        self.paused = False
-        self.pause_button.setEnabled(False)
-        self.stop_button.setEnabled(False)
-
-    def send_gcode_blocking(self):
         if not self.serial_port:
             self.update_status("No serial connection.")
             return
@@ -334,6 +280,10 @@ class GRBLController(QWidget):
             print(line)
             if not self.sending:
                 break
+            
+            if self.paused:
+                while self.paused:
+                    time.sleep(0.1)
             
             line = line.strip().upper()
 
@@ -360,20 +310,22 @@ class GRBLController(QWidget):
 
                 self.coordinates.append((x, y))
 
-            if line.startswith('M4'):
-                # Update the plot with the new coordinates
-                self.plot_toolpath(pointcolor='red')
-
+            self.serial_port.write((line + '\n').encode())
+            self.comm.update_status.emit(f"Sent: {line}")
             grbl_response = ''
 
             while grbl_response != 'ok':
-                # Send the G-code line to GRBL
-                self.serial_port.write((line + '\n').encode())
                 time.sleep(0.1)
                 # Wait for the response from GRBL
                 grbl_response = self.serial_port.readline().decode().strip()
-                print(f"Sent: {line} | Response: {grbl_response}")
-                self.comm.update_status.emit(f"Sent: {line} | Response: {grbl_response}")
+
+            print(f"Sent: {line} | Response: {grbl_response}")
+            self.comm.update_status.emit(f"Sent: {line} | Response: {grbl_response}")
+
+            if 'END OF GLUE DEPOSITION' in line:
+                # Update the plot with the new coordinates
+                self.plot_toolpath(pointcolor='red')
+                
 
         self.comm.update_status.emit("Finished sending G-code.")
         self.start_button.setText("Start Sending")
@@ -382,11 +334,19 @@ class GRBLController(QWidget):
 
     def update_status(self, message):
         self.status_label.setText(f"Status: {message}")
-
+        
     def closeEvent(self, event):
-        if self.serial_port and self.serial_port.is_open:
-            self.serial_port.close()
-        event.accept()
+        # Ask for confirmation before closing the application
+        reply = QMessageBox.question(
+            self, "Message", "Are you sure you want to quit?", QMessageBox.Yes, QMessageBox.No
+        )
+
+        if reply == QMessageBox.Yes:
+            if self.serial_port and self.serial_port.is_open:
+                self.serial_port.close()
+            event.accept()
+        else:
+            event.ignore()
 
 
 if __name__ == "__main__":

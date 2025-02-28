@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import (
     QComboBox, QHBoxLayout, QMessageBox, QTabWidget, QGridLayout, QFrame,
     QLCDNumber, QLineEdit
 )
-from PyQt5.QtGui import QIcon
+from PyQt5.QtGui import QIcon, QFont
 from PyQt5.QtCore import pyqtSignal, QObject, Qt
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -38,6 +38,8 @@ class GRBLController(QWidget):
         self.init_ui()
         self.scan_ports()
 
+        self.debug = False
+
     def init_ui(self):
         main_layout = QVBoxLayout()
 
@@ -52,6 +54,21 @@ class GRBLController(QWidget):
             border-radius: 5px;
         """)
         main_layout.addWidget(self.status_label)
+
+        # Define a stylesheet for the buttons
+        disable_button_style = """
+            QPushButton {
+                background-color: #bfbfbf;  /* Gray background */
+                color: white;              /* White text */
+                border: none;              /* No border */
+                border-radius: 10px;       /* Rounded corners */
+                padding: 10px;            /* Padding */
+                font-size: 16px;           /* Font size */
+                font-weight: bold;         /* Bold text */
+                min-width: 60px;           /* Minimum width */
+                min-height: 60px;         /* Minimum height */
+            }
+        """
 
         # Connection layout (always visible)
         port_layout = QHBoxLayout()
@@ -81,7 +98,14 @@ class GRBLController(QWidget):
         self.figure.subplots_adjust(left=0.05, right=0.95, bottom=0.05, top=0.95)
         self.ax = self.figure.add_subplot(111)
         self.ax.axis('off')
-        self.ax.imshow(plt.imread('logo.png'))  # Logo as background
+        if self.debug:
+            print("Debug mode enabled.")
+            # Add "DEBUG MODE" text to the plot
+            self.ax.text(0.5, 0.5, "DEBUG MODE", fontsize=24, ha='center', va='center', color='red')
+            self.ax.text(0.5, 0.4, "No serial communication", fontsize=16, ha='center', va='center', color='red')
+            self.ax.text(0.5, 0.3, "G-code commands will only be printed on terminal", fontsize=16, ha='center', va='center', color='red')
+        else:
+            self.ax.imshow(plt.imread('logo.png'))  # Logo as background
         self.main_tab_layout.addWidget(self.canvas)
 
         self.load_button = QPushButton("Load G-code File")
@@ -136,46 +160,30 @@ class GRBLController(QWidget):
         jog_layout = QVBoxLayout()
         grid = QGridLayout()
 
-        # Define a stylesheet for the buttons
-        button_style = """
-            QPushButton {
-                background-color: #4CAF50;  /* Green background */
-                color: white;              /* White text */
-                border: none;              /* No border */
-                border-radius: 10px;       /* Rounded corners */
-                padding: 10px;            /* Padding */
-                font-size: 16px;           /* Font size */
-                font-weight: bold;         /* Bold text */
-                min-width: 60px;           /* Minimum width */
-                min-height: 60px;         /* Minimum height */
-            }
-            QPushButton:hover {
-                background-color: #45a049; /* Darker green on hover */
-            }
-            QPushButton:pressed {
-                background-color: #3d8b40; /* Even darker green when pressed */
-            }
-        """
-
         # Jog Buttons
         self.btnYplus = QPushButton("Y+")
-        self.btnYplus.setStyleSheet(button_style)
+        self.btnYplus.setStyleSheet(disable_button_style)
+        self.btnYplus.setEnabled(False)
         self.btnYplus.setToolTip("Move Y-axis in the positive direction")
 
         self.btnYminus = QPushButton("Y-")
-        self.btnYminus.setStyleSheet(button_style)
+        self.btnYminus.setStyleSheet(disable_button_style)
+        self.btnYminus.setEnabled(False)
         self.btnYminus.setToolTip("Move Y-axis in the negative direction")
 
         self.btnXplus = QPushButton("X+")
-        self.btnXplus.setStyleSheet(button_style)
+        self.btnXplus.setStyleSheet(disable_button_style)
+        self.btnXplus.setEnabled(False)
         self.btnXplus.setToolTip("Move X-axis in the positive direction")
 
         self.btnXminus = QPushButton("X-")
-        self.btnXminus.setStyleSheet(button_style)
+        self.btnXminus.setStyleSheet(disable_button_style)
+        self.btnXminus.setEnabled(False)
         self.btnXminus.setToolTip("Move X-axis in the negative direction")
 
         self.btnHome = QPushButton("Home")
-        self.btnHome.setStyleSheet(button_style)
+        self.btnHome.setStyleSheet(disable_button_style)
+        self.btnHome.setEnabled(False)
         self.btnHome.setToolTip("Move to the home position")
 
         # Add buttons to the grid
@@ -306,23 +314,39 @@ class GRBLController(QWidget):
             direction = -1
 
         axis = "Y" if self.sender() in [self.btnYplus, self.btnYminus] else "X"
-        steps = float(self.y_steps_selector.currentText()) if axis == "Y" else float(self.x_steps_selector.currentText())
+        steps = int(self.x_steps_selector.text()) if axis == "X" else int(self.y_steps_selector.text())
 
         command = f"G00 {axis}{direction * steps}"
-        print(f"Moving {axis} by {direction * steps} steps")  # Replace with actual movement code
+
+        self.sending = True
+        self.update_status(f"Moving {axis} by {direction * steps} mm")
+
+        if GRBLController.debug:
+            print("In debug mode, not sending command.")
+            self.print_lines([command])
+        else:
+            print("Sending command to serial port")
+            self.send_lines([command])
+
+        self.sending = False
 
     def move_home(self):
-        print("Moving to home position")  # Replace with actual movement code
+        self.update_status("Moving to home position")
         command = "$H"
-        self.print_lines([command])
-        # self.send_lines([command])
+        if GRBLController.debug:
+            self.print_lines([command])
+        else:
+            self.send_lines([command])
         self.update_position(0, 0)  # Reset position to home
 
     def update_feed_rate(self, value):
-        print(f"Feed rate updated to: {value}")  # Replace with actual logic
+        self.update_status(f"Setting feed rate to {value} mm/min")
         command = f"F{value}"
-        self.print_lines([command])
-        # self.send_lines([command])
+        
+        if GRBLController.debug:
+            self.print_lines([command])
+        else:
+            self.send_lines([command])
 
     def update_position(self, x_change, y_change):
         # Example logic to update the current position display
@@ -364,6 +388,39 @@ class GRBLController(QWidget):
                 self.connect_button.setText("Disconnect")
                 self.update_status(f"Connected to {port} at {baud} baud.")
                 self.load_button.setEnabled(True)
+
+                button_style = """
+                QPushButton {
+                    background-color: #4CAF50;  /* Green background */
+                    color: white;              /* White text */
+                    border: none;              /* No border */
+                    border-radius: 10px;       /* Rounded corners */
+                    padding: 10px;            /* Padding */
+                    font-size: 16px;           /* Font size */
+                    font-weight: bold;         /* Bold text */
+                    min-width: 60px;           /* Minimum width */
+                    min-height: 60px;         /* Minimum height */
+                }
+                QPushButton:hover {
+                    background-color: #45a049; /* Darker green on hover */
+                }
+                QPushButton:pressed {
+                    background-color: #3d8b40; /* Even darker green when pressed */
+                }
+            """
+               
+                # Enable manual controls
+                self.btnYplus.setEnabled(True)
+                self.btnYplus.setStyleSheet(button_style)
+                self.btnYminus.setEnabled(True)
+                self.btnYminus.setStyleSheet(button_style)
+                self.btnXplus.setEnabled(True)
+                self.btnXplus.setStyleSheet(button_style)
+                self.btnXminus.setEnabled(True)
+                self.btnXminus.setStyleSheet(button_style)
+                self.btnHome.setEnabled(True)
+                self.btnHome.setStyleSheet(button_style)
+
             except serial.SerialException as e:
                 self.update_status(f"Serial error: {e}")
         else:
@@ -562,43 +619,57 @@ class GRBLController(QWidget):
         self.thread.start()
 
     def send_gcode(self):
-        #try:
-        # Send the program initialization block
-        self.comm.update_status.emit("Starting G-code transmission")
-        self.print_lines(self.program_initialization)
-        self.print_lines(["G90"])  # Ensure absolute positioning (coordinates are converted during parsing to absolute)
+        try:
+            # Send the program initialization block
+            self.comm.update_status.emit("Starting G-code transmission")
 
-        first_block = int(self.first_block_selector.currentText())
-        last_block = int(self.last_block_selector.currentText())
-        # Disable the first and last block selectors while sending
-        self.first_block_selector.setEnabled(False)
-        self.last_block_selector.setEnabled(False)
+            if GRBLController.debug:
+                self.print_lines(self.program_initialization)
+                self.print_lines(["G90"])  # Ensure absolute positioning (coordinates are converted during parsing to absolute)
+            else:
+                self.send_lines(self.program_initialization)
+                self.send_lines(["G90"])
 
-        # Send each command block in the toolpath
-        for block in self.toolpath[first_block:last_block + 1]:
-            if not self.sending:
-                break
-            while self.paused:
-                time.sleep(0.1)
-            # Send movement command
-            self.print_lines([f"G{block['movement_type']} X{block['x']} Y{block['y']}"])
-            # Send glue deposition commands
-            self.print_lines(block['glue_commands'])
-            self.glued_coordinates.append((block['x'], block['y']))
-            self.plot_glued_toolpath()
+            first_block = int(self.first_block_selector.currentText())
+            last_block = int(self.last_block_selector.currentText())
 
-        self.comm.update_status.emit("Finished sending G-code.")
-        # except serial.SerialException as e:
-        #     self.comm.update_status.emit(f"Serial error: {e}")
-        #     self.sending = False
-        # except Exception as e:
-        #     self.comm.update_status.emit(f"Error: {e}")
-        #     self.sending = False
-        # finally:
-        #     self.comm.update_status.emit("Transmission stopped")
-        #     self.start_button.setEnabled(True)
-        #     self.pause_button.setEnabled(False)
-        #     self.stop_button.setEnabled(False)
+            # Disable the first and last block selectors while sending
+            self.first_block_selector.setEnabled(False)
+            self.last_block_selector.setEnabled(False)
+
+            # Send each command block in the toolpath
+            for block in self.toolpath[first_block:last_block + 1]:
+                if not self.sending:
+                    break
+                while self.paused:
+                    time.sleep(0.1)
+                # Send movement command
+                if GRBLController.debug:
+                    self.print_lines([f"G{block['movement_type']} X{block['x']} Y{block['y']}"])
+                else:
+                    self.send_lines([f"G{block['movement_type']} X{block['x']} Y{block['y']}"])  
+
+                # Send glue deposition commands
+                if GRBLController.debug:
+                    self.print_lines(block['glue_commands'])
+                else:
+                    self.send_lines(block['glue_commands'])
+
+                self.glued_coordinates.append((block['x'], block['y']))
+                self.plot_glued_toolpath()
+
+            self.comm.update_status.emit("Finished sending G-code.")
+        except serial.SerialException as e:
+            self.comm.update_status.emit(f"Serial error: {e}")
+            self.sending = False
+        except Exception as e:
+            self.comm.update_status.emit(f"Error: {e}")
+            self.sending = False
+        finally:
+            self.comm.update_status.emit("Transmission stopped")
+            self.start_button.setEnabled(True)
+            self.pause_button.setEnabled(False)
+            self.stop_button.setEnabled(False)
 
     def send_lines(self, lines):
         for line in lines:
@@ -654,6 +725,11 @@ class GRBLController(QWidget):
 
 
 if __name__ == "__main__":
+
+    # If launched with -d or --debug flag, enable debug mode
+    if len(sys.argv) > 1 and sys.argv[1] in ['-d', '--debug']:
+        GRBLController.debug = True
+
     app = QApplication(sys.argv)
     window = GRBLController()
     window.showMaximized()

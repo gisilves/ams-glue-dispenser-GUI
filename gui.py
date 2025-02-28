@@ -542,6 +542,8 @@ class GRBLController(QWidget):
         self.paused = False
         self.start_button.setEnabled(True)
         self.update_status("G-code sending stopped.")
+        self.paused = False
+        self.pause_button.setStyleSheet("")
         self.pause_button.setEnabled(False)
         self.stop_button.setEnabled(False)
 

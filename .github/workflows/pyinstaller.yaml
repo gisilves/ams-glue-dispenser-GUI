@@ -39,9 +39,10 @@ jobs:
 
       - name: Copy additional files
         run: |
+          cp src/amsl0_glue_dispenser.spec application/
           cp src/icon.ico application/
           cp src/logo.png application/
-          cp src/GCode_writer.py application/
+          cp src/GCode_writer.ipynb application/
           cp README.md application/
 
       - name: Zip application folder

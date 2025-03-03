@@ -1,18 +1,34 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+
+# Include PyQt5 and matplotlib in hidden imports
+hidden_imports = [
+    'pkg_resources.extern',
+    'PyQt5',
+    'PyQt5.QtCore',
+    'PyQt5.QtGui',
+    'PyQt5.QtWidgets',
+    'matplotlib',
+    'matplotlib.backends.backend_qt5agg',  # Required for PyQt5 backend
+]
+
+# Collect data files for PyQt5 and matplotlib
+datas = collect_data_files('PyQt5') + collect_data_files('matplotlib')
 
 a = Analysis(
     ['amsl0_glue_dispenser.py'],
     pathex=[],
     binaries=[],
-    datas=[],
-    hiddenimports=['pkg_resources.extern'],
+    datas=datas,  # Include collected data files
+    hiddenimports=hidden_imports,  # Include hidden imports
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[],
     noarchive=False,
 )
+
 pyz = PYZ(a.pure)
 
 exe = EXE(

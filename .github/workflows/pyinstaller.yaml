@@ -49,20 +49,20 @@ jobs:
         run: powershell Compress-Archive -Path application -DestinationPath application.zip
         
       - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
+        uses: actions/create-release@v3
         with:
-          tag_name: ${{ env.RELEASE_TAG }}
-          release_name: ${{ env.RELEASE_TAG }}
+          tag_name: ${{ github.ref_name }}
+          release_name: Release ${{ github.ref_name }}
           draft: false
           prerelease: false
           token: ${{ secrets.MY_PAT }}
 
       - name: Upload Release Asset
         uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.MY_PAT }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: application.zip
-          asset_name: application.zip
-          asset_content_type: application/octet-stream
-          token: ${{ secrets.MY_PAT }}
+          asset_path: ./your-file.zip
+          asset_name: your-file.zip
+          asset_content_type: application/zip

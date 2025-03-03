@@ -317,7 +317,6 @@ class GRBLController(QWidget):
 
         self.feed_rate_selector.textChanged.connect(self.update_feed_rate)
 
-    # Example functions
     def manual_move(self):
 
         if self.sender() == self.btnYplus or self.sender() == self.btnXplus:
@@ -340,6 +339,7 @@ class GRBLController(QWidget):
             print("Sending command to serial port")
             self.send_lines([command])
 
+        self.update_position(direction * steps if axis == "X" else 0, direction * steps if axis == "Y" else 0)
         self.sending = False
 
     def move_home(self):
@@ -347,9 +347,10 @@ class GRBLController(QWidget):
         command = "$H"
         if GRBLController.debug:
             self.print_lines([command])
+            self.update_position(0, 0)  # Reset position to home
         else:
             self.send_lines([command])
-        self.update_position(0, 0)  # Reset position to home
+            self.update_position(0, 0)  # Reset position to home
 
     def update_feed_rate(self, value):
         self.update_status(f"Setting feed rate to {value} mm/min")
@@ -370,8 +371,9 @@ class GRBLController(QWidget):
 
     def get_current_position(self):
         # Replace with actual logic to get the current position
-        return 0.0, 0.0  # Placeholder
-
+        # Read value from display for now
+        return float(self.x_display.value()), float(self.y_display.value())
+    
     def scan_ports(self):
         self.port_selector.clear()
         ports = serial.tools.list_ports.comports()

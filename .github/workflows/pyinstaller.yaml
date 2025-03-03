@@ -29,7 +29,7 @@ jobs:
         run: pip install pyinstaller
 
       - name: Package Application
-        run: pyinstaller --onefile --noconsole --name amsl0_glue_dispenser src/main.py
+        run: pyinstaller --onefile --noconsole --name amsl0_glue_dispenser src/amsl0_glue_dispenser.py
 
       - name: Create temp application directory
         run: mkdir -p application
@@ -39,7 +39,7 @@ jobs:
 
       - name: Copy additional files
         run: |
-          cp src/voice.mp3 application/
+          cp src/icon.ico application/
           cp src/logo.png application/
           cp src/GCode_writer.py application/
           cp README.md application/

@@ -26,7 +26,7 @@ jobs:
           python-version: '3.8'
 
       - name: Install dependencies
-        run: pip install pyinstaller
+        run: pip install pyinstaller matplotlib pyqt5
 
       - name: Package Application
         run: pyinstaller src/amsl0_glue_dispenser.spec

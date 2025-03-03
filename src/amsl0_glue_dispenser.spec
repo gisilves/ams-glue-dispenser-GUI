@@ -5,10 +5,8 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[],
-    hiddenimports = [
-    'PyQt5', 'PyQt5.QtCore', 'PyQt5.QtGui', 'PyQt5.QtWidgets',
-    'matplotlib', 'pkg_resources.extern'
-    ]    
+    hiddenimports = ['PyQt5', 'PyQt5.QtCore', 'PyQt5.QtGui', 'PyQt5.QtWidgets',
+    'matplotlib', 'pkg_resources.extern'],    
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

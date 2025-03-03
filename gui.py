@@ -113,6 +113,18 @@ class GRBLController(QWidget):
         self.load_button.clicked.connect(self.load_file)
         self.main_tab_layout.addWidget(self.load_button)
 
+        # File label (always visible)
+        self.file_label = QLabel("No file loaded")
+        self.file_label.setStyleSheet("""
+            font-size: 18px;
+            font-weight: bold;
+            border: 2px solid #2e3a47;
+            padding: 10px;
+            border-radius: 5px;
+        """)
+        self.file_label.setFixedHeight(50)
+        self.main_tab_layout.addWidget(self.file_label)
+
         settings_layout = QHBoxLayout()
         settings_layout.addWidget(QLabel("First Block:"))
         self.first_block_selector = QComboBox()
@@ -448,6 +460,15 @@ class GRBLController(QWidget):
                 self.start_button.setEnabled(True)  # Enable Start button after file load
                 self.first_block_selector.setEnabled(True)
                 self.last_block_selector.setEnabled(True)
+                self.file_label.setStyleSheet("""
+                    font-size: 18px;
+                    font-weight: bold;
+                    font-color: white;
+                    padding: 10px;
+                    border: 2px solid #2e3a47;
+                    border-radius: 5px;
+                """)
+                self.file_label.setText(f"File: {file_path}")
 
     def parse_gcode(self, file_path):
         self.movement_type = []

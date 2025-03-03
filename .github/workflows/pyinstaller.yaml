@@ -3,7 +3,6 @@ name: Package Application with Pyinstaller
 on:
   push:
     branches: 
-      - pyinstaller_tests
       - main
 
 jobs:

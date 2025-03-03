@@ -729,6 +729,8 @@ if __name__ == "__main__":
     # If launched with -d or --debug flag, enable debug mode
     if len(sys.argv) > 1 and sys.argv[1] in ['-d', '--debug']:
         GRBLController.debug = True
+    else:
+        GRBLController.debug = False
 
     app = QApplication(sys.argv)
     window = GRBLController()

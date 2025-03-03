@@ -8,53 +8,44 @@ on:
 jobs:
   build:
     if: contains(github.event.head_commit.message, 'Release')
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     defaults:
       run:
         shell: bash
 
     steps:
-      - name: Use Node.js 16
-        uses: actions/setup-node@v2
-        with:
-          node-version: '16'
-
-      - name: Set up Python 3.8
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.8'
-
       - name: Checkout code
         uses: actions/checkout@v2
 
       - name: Set Release Tag
         run: echo "RELEASE_TAG=$(echo ${GITHUB_SHA::5})" >> $GITHUB_ENV
 
-      - name: Package Application
-        uses: JackMcKew/pyinstaller-action-windows@main
+      - name: Set up Python 3.8
+        uses: actions/setup-python@v4
         with:
-          path: src
+          python-version: '3.8'
+
+      - name: Install dependencies
+        run: pip install pyinstaller
+
+      - name: Package Application
+        run: pyinstaller --onefile --noconsole --name amsl0_glue_dispenser src/main.py
 
       - name: Create temp application directory
         run: mkdir -p application
 
       - name: Copy application to temp directory
-        run: cp src/dist/windows/amsl0_glue_dispenser.exe application/amsl0_glue_dispenser.exe
+        run: cp dist/amsl0_glue_dispenser.exe application/
 
-      - name: Copy src/voice.mp3 to temp directory
-        run: cp src/voice.mp3 application/voice.mp3
-
-      - name: Copy src/logo.png to temp directory
-        run: cp src/logo.png application/logo.png
-
-      - name: Copy src/GCode_writer.py to temp directory
-        run: cp src/GCode_writer.py application/GCode_writer.py
-
-      - name: Copy README.md to temp directory
-        run: cp README.md application/README.md
+      - name: Copy additional files
+        run: |
+          cp src/voice.mp3 application/
+          cp src/logo.png application/
+          cp src/GCode_writer.py application/
+          cp README.md application/
 
       - name: Zip application folder
-        run: zip -r application.zip application
+        run: powershell Compress-Archive -Path application -DestinationPath application.zip
         
       - name: Create Release
         id: create_release

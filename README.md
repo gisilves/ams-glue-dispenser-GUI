@@ -9,4 +9,4 @@ Software to control the Glue Dispenser for the L0 integration
 - Jupyter (to use GCode_writer.ipnb)
 
 
-## N.B. pyinstaller-action still WIP
+## N.B. pyinstaller-action still WIP (2)

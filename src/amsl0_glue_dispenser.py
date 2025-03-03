@@ -14,6 +14,7 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import serial
 import serial.tools.list_ports
+import os.path
 
 class Communicator(QObject):
     update_status = pyqtSignal(str)
@@ -105,7 +106,12 @@ class GRBLController(QWidget):
             self.ax.text(0.5, 0.4, "No serial communication", fontsize=16, ha='center', va='center', color='red')
             self.ax.text(0.5, 0.3, "G-code commands will only be printed on terminal", fontsize=16, ha='center', va='center', color='red')
         else:
-            self.ax.imshow(plt.imread('logo.png'))  # Logo as background
+            # Check if logo.png is present
+            if os.path.isfile('logo.png'):
+                self.ax.imshow(plt.imread('logo.png'))  # Logo as background
+            else:
+                self.ax.text(0.5, 0.5, "NORMAL MODE", fontsize=24, ha='center', va='center', color='red')
+                self.ax.text(0.5, 0.4, "logo.png not found", fontsize=16, ha='center', va='center', color='red')
         self.main_tab_layout.addWidget(self.canvas)
 
         self.load_button = QPushButton("Load G-code File")

@@ -1,17 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-
-from PyInstaller.utils.hooks import collect_submodules
-
-# Collect hidden imports for PyQt5 and Matplotlib
-hiddenimports = collect_submodules('PyQt5') + collect_submodules('matplotlib') + ['pkg_resources.extern', 'PyQt5']
-
 a = Analysis(
     ['amsl0_glue_dispenser.py'],
     pathex=[],
     binaries=[],
     datas=[],
-    hiddenimports=hiddenimports + ['pkg_resources.extern'],  # Add necessary hidden imports
+    hiddenimports = [
+    'PyQt5', 'PyQt5.QtCore', 'PyQt5.QtGui', 'PyQt5.QtWidgets',
+    'matplotlib', 'pkg_resources.extern'
+    ]    
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

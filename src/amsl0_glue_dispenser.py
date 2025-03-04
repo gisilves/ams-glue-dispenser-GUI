@@ -32,6 +32,7 @@ class GRBLController(QWidget):
         self.connected = False
         self.coordinates = [(0, 0)]
         self.glued_coordinates = [(0, 0)]
+        self.maximumTravel = 990
         self.thread = None
         self.comm = Communicator()
         self.comm.update_status.connect(self.update_status)
@@ -171,7 +172,7 @@ class GRBLController(QWidget):
         self.manual_tab_layout = QHBoxLayout()
 
         self.manual_tab.setLayout(self.manual_tab_layout)
-        self.tabs.addTab(self.manual_tab, "Manual Control")
+        self.tabs.addTab(self.manual_tab, "Manual Control (Work In Progress)")
 
         # Left side: Jog controls
         jog_controls_widget = QWidget()
@@ -236,7 +237,7 @@ class GRBLController(QWidget):
 
         # Add X steps control with label
         x_steps_layout = QHBoxLayout()
-        x_steps_layout.addWidget(QLabel("X Steps:"))
+        x_steps_layout.addWidget(QLabel("X Step (mm):"))
         self.x_steps_selector = QLineEdit()
         self.x_steps_selector.setText("1")
         self.x_steps_selector.setFixedWidth(100)
@@ -245,7 +246,7 @@ class GRBLController(QWidget):
 
         # Add Y steps control with label
         y_steps_layout = QHBoxLayout()
-        y_steps_layout.addWidget(QLabel("Y Steps:"))
+        y_steps_layout.addWidget(QLabel("Y Step (mm):"))
         self.y_steps_selector = QLineEdit()
         self.y_steps_selector.setText("1")
         self.y_steps_selector.setFixedWidth(100)
@@ -254,7 +255,7 @@ class GRBLController(QWidget):
 
         # Add feed rate control with label
         feed_rate_layout = QHBoxLayout()
-        feed_rate_layout.addWidget(QLabel("Feed Rate:"))
+        feed_rate_layout.addWidget(QLabel("Feed Rate (mm/min):"))
         self.feed_rate_selector = QLineEdit()
         self.feed_rate_selector.setText("500")
         self.feed_rate_selector.setFixedWidth(100)
@@ -332,8 +333,14 @@ class GRBLController(QWidget):
 
         axis = "Y" if self.sender() in [self.btnYplus, self.btnYminus] else "X"
         steps = int(self.x_steps_selector.text()) if axis == "X" else int(self.y_steps_selector.text())
+        
+        current_x, current_y = self.get_current_position()  # Replace with actual position tracking
 
-        command = f"G00 {axis}{direction * steps}"
+        # If movement results in value less than 0, clip it to a bit over 0
+        if {current_x + {direction * steps} if axis == "X" else current_y + {direction * steps}} < 0:
+            command = f"G00 {axis}{current_x + 0.001 if axis == "X" else current_y + 0.001}"
+        else:
+            command = f"G00 {axis}{direction * steps}"
 
         self.sending = True
         self.update_status(f"Moving {axis} by {direction * steps} mm")
@@ -350,6 +357,7 @@ class GRBLController(QWidget):
 
     def move_home(self):
         self.update_status("Moving to home position")
+        self.sending = True
         command = "$H"
         if GRBLController.debug:
             self.print_lines([command])
@@ -357,6 +365,36 @@ class GRBLController(QWidget):
         else:
             self.send_lines([command])
             self.update_position(0, 0)  # Reset position to home
+        self.sending = False
+        
+        # Enable movement buttons
+        button_style = """
+        QPushButton {
+            background-color: #4CAF50;  /* Green background */
+            color: white;              /* White text */
+            border: none;              /* No border */
+            border-radius: 10px;       /* Rounded corners */
+            padding: 10px;            /* Padding */
+            font-size: 16px;           /* Font size */
+            font-weight: bold;         /* Bold text */
+            min-width: 60px;           /* Minimum width */
+            min-height: 60px;         /* Minimum height */
+        }
+        QPushButton:hover {
+            background-color: #45a049; /* Darker green on hover */
+        }
+        QPushButton:pressed {
+            background-color: #3d8b40; /* Even darker green when pressed */
+        }
+    """  
+        self.btnYplus.setEnabled(True)
+        self.btnYplus.setStyleSheet(button_style)
+        self.btnYminus.setEnabled(True)
+        self.btnYminus.setStyleSheet(button_style)
+        self.btnXplus.setEnabled(True)
+        self.btnXplus.setStyleSheet(button_style)
+        self.btnXminus.setEnabled(True)
+        self.btnXminus.setStyleSheet(button_style)
 
     def update_feed_rate(self, value):
         self.update_status(f"Setting feed rate to {value} mm/min")
@@ -366,6 +404,8 @@ class GRBLController(QWidget):
             self.print_lines([command])
         else:
             self.send_lines([command])
+            
+    
 
     def update_position(self, x_change, y_change):
         # Example logic to update the current position display
@@ -393,6 +433,7 @@ class GRBLController(QWidget):
             self.disconnect_serial()
         else:
             self.init_serial()
+            self.send_lines('$X')
 
     def init_serial(self):
         port = self.port_selector.currentData()
@@ -429,21 +470,15 @@ class GRBLController(QWidget):
                 }
             """
                
-                # Enable manual controls
-                self.btnYplus.setEnabled(True)
-                self.btnYplus.setStyleSheet(button_style)
-                self.btnYminus.setEnabled(True)
-                self.btnYminus.setStyleSheet(button_style)
-                self.btnXplus.setEnabled(True)
-                self.btnXplus.setStyleSheet(button_style)
-                self.btnXminus.setEnabled(True)
-                self.btnXminus.setStyleSheet(button_style)
+                # Enable home control
                 self.btnHome.setEnabled(True)
                 self.btnHome.setStyleSheet(button_style)
 
             except serial.SerialException as e:
                 self.update_status(f"Serial error: {e}")
         else:
+            if GRBLController.debug:
+                self.load_button.setEnabled(True)
             self.update_status("No port selected.")
 
     def disconnect_serial(self):
@@ -471,7 +506,6 @@ class GRBLController(QWidget):
                 self.file_label.setStyleSheet("""
                     font-size: 18px;
                     font-weight: bold;
-                    font-color: white;
                     padding: 10px;
                     border: 2px solid #2e3a47;
                     border-radius: 5px;
@@ -523,6 +557,9 @@ class GRBLController(QWidget):
 
                         self.coordinates.append((current_x, current_y))
                         self.movement_type.append(movement_type)
+                    
+                    if '$130' in line:
+                        self.maximumTravel = line[5:8]
                         
                 if "; ------- Glue deposition -------" in line:
                     in_glue_block = True
@@ -540,18 +577,24 @@ class GRBLController(QWidget):
                 if in_glue_block:
                     current_glue_commands.append(line)
 
+                if not in_init_block:
+                    
+                    x, y, movement_type = self.match_pattern(line, command_pattern)
+                    
+                    if 'G90' in line:
+                        is_relative = False
+                    elif 'G91' in line:
+                        is_relative = True
+                        
+                    if is_relative:
+                        current_x += x
+                        current_y += y
+                    else:
+                        current_x = x
+                        current_y = y
 
-                x, y, movement_type = self.match_pattern(line, command_pattern)
-
-                if is_relative:
-                    current_x += x
-                    current_y += y
-                else:
-                    current_x = x
-                    current_y = y
-
-                self.coordinates.append((current_x, current_y))
-                self.movement_type.append(movement_type)
+                    self.coordinates.append((current_x, current_y))
+                    self.movement_type.append(movement_type)
 
             # Update the first and last block selectors
             self.first_block_selector.clear()
@@ -584,7 +627,7 @@ class GRBLController(QWidget):
             x_vals, y_vals = zip(*self.coordinates)
             self.ax.plot(x_vals, y_vals, linestyle='--', color=pointcolor, label='Toolpath')
             self.ax.scatter(x_vals, y_vals, color=pointcolor, s=50)
-
+        
         self.ax.set_xlim(-50, max(x_vals) + 50)
         self.ax.set_ylim(-50, max(y_vals) + 50)
         
@@ -593,6 +636,9 @@ class GRBLController(QWidget):
         self.ax.set_title("G-code Toolpath Visualization")
         self.ax.grid(True)
         self.ax.set_aspect('equal', adjustable='box')
+        
+        # if max(x_vals) >= float(self.maximumTravel):
+        #     QMessageBox.warning(self, f"WARNING: last line is over maximum allowed travel of X axis of {self.maximumTravel}", QMessageBox::Abort)
 
         self.canvas.draw()
 

@@ -24,6 +24,27 @@ class GRBLController(QWidget):
     show_message_box_signal = pyqtSignal()
 
     def __init__(self):
+        """
+        Initialize the GRBLController widget.
+
+        This constructor sets up the main window for the AMS PG GLUE DISPENSER application, 
+        initializes various attributes related to the serial communication, toolpath handling, 
+        and UI components. It also connects signals for status updates and first block detection, 
+        and initializes the user interface and available serial ports.
+
+        Attributes:
+            serial_port: Serial port object used for communication.
+            sending: Boolean indicating if G-code is currently being sent.
+            paused: Boolean indicating if the sending of G-code is paused.
+            connected: Boolean indicating if the device is connected.
+            coordinates: List of tuples representing toolpath coordinates.
+            glued_coordinates: List of tuples representing coordinates with glue applied.
+            maximumTravel: Maximum travel distance for the X axis.
+            thread: Thread object for handling G-code sending in a separate thread.
+            comm: Communicator object for emitting and connecting signals.
+            debug: Boolean indicating if the application is in debug mode.
+        """
+
         super().__init__()
 
         self.setWindowTitle("AMS PG GLUE DISPENSER")
@@ -797,8 +818,10 @@ class GRBLController(QWidget):
         self.ax.grid(True)
         self.ax.set_aspect('equal', adjustable='box')
         
-        # if max(x_vals) >= float(self.maximumTravel):
-        #     QMessageBox.warning(self, f"WARNING: last line is over maximum allowed travel of X axis of {self.maximumTravel}", QMessageBox::Abort)
+
+        # Check if the last line is over the maximum allowed travel
+        if max(x_vals) >= float(self.maximumTravel):
+            QMessageBox.warning(self, "WARNING", "The last line is over the maximum allowed travel", QMessageBox.Ok)
 
         self.canvas.draw()
 

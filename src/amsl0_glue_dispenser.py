@@ -15,13 +15,14 @@ from matplotlib.figure import Figure
 import serial
 import serial.tools.list_ports
 import os.path
-import re
 
 class Communicator(QObject):
     update_status = pyqtSignal(str)
     first_block_signal = pyqtSignal()
 
 class GRBLController(QWidget):
+    show_message_box_signal = pyqtSignal()
+
     def __init__(self):
         super().__init__()
 
@@ -39,7 +40,8 @@ class GRBLController(QWidget):
         self.comm = Communicator()
         self.comm.update_status.connect(self.update_status)
         self.comm.first_block_signal.connect(self.first_point_reached)
-
+        self.show_message_box_signal.connect(self.show_message_box)
+        
         self.init_ui()
         self.scan_ports()
 
@@ -180,7 +182,7 @@ class GRBLController(QWidget):
         # Retrieve Load button size
         load_button_size = self.load_button.sizeHint()
         load_button_height = load_button_size.height()
-        self.file_label.setFixedHeight(load_button_height)
+        self.file_label.setFixedHeight(load_button_height + 15)
         self.main_tab_layout.addWidget(self.file_label)
 
         settings_layout = QHBoxLayout()
@@ -857,6 +859,13 @@ class GRBLController(QWidget):
         self.pause_button.setEnabled(True)
         self.stop_button.setEnabled(True)
 
+        # Clean up glued coordinates
+        self.glued_coordinates = [(0, 0)]
+        # Clean up glued toolpath
+        if hasattr(self, 'ax'):
+            self.ax.cla()
+            self.plot_toolpath()
+
         self.thread = threading.Thread(target=self.send_gcode)
         self.thread.start()
 
@@ -885,18 +894,22 @@ class GRBLController(QWidget):
                 if not self.sending:
                     break
 
-                # If it's the first block, send signal to main thread
-                if block == self.toolpath[first_block]:
-                    self.update_status.emit("First point reached")
-                    #self.first_block_signal.emit()
-
                 while self.paused:
                     time.sleep(0.1)
                 # Send movement command
                 if GRBLController.debug:
                     self.print_lines([f"G{block['movement_type']} X{block['x']} Y{block['y']}"])
+                    if block == self.toolpath[first_block]:
+                        print("First block reached, emitting signal")  # Debug print
+                        self.comm.update_status.emit("First point reached")
+                        self.comm.first_block_signal.emit()  # Emit the signal
+                        time.sleep(5)
                 else:
-                    self.send_lines([f"G{block['movement_type']} X{block['x']} Y{block['y']}"])  
+                    self.send_lines([f"G{block['movement_type']} X{block['x']} Y{block['y']}"])
+                    if block == self.toolpath[first_block]:
+                        self.comm.update_status.emit("First point reached")
+                        self.first_block_signal.emit()  # Emit the signal
+  
 
                 # Send glue deposition commands
                 if GRBLController.debug:
@@ -954,23 +967,24 @@ class GRBLController(QWidget):
                 time.sleep(0.1)
             print((line))
             self.comm.update_status.emit(f"Sent: {line}")
-            time.sleep(1)
+            time.sleep(0.25)
 
     def update_status(self, message):
         self.status_label.setText(f"Status: {message}")
 
     def first_point_reached(self):
-        self.toggle_pause()
-
-        # Ask user for confirmation
+        self.toggle_pause()  # Pause the transmission
+        self.show_message_box_signal.emit()  # Emit the signal to show the message box
+    
+    def show_message_box(self):
+        print("Showing message box")  # Debug print
         reply = QMessageBox.question(
             self, "Message", "First point reached. Continue?", QMessageBox.Yes, QMessageBox.No
         )
-
         if reply == QMessageBox.Yes:
-            self.toggle_pause()
+            self.toggle_pause()  # Resume the transmission
         else:
-            self.stop_sending()
+            self.stop_sending()  # Stop the transmission
 
     def closeEvent(self, event):
         # Ask for confirmation before closing the application

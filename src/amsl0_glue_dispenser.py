@@ -7,17 +7,19 @@ from PyQt5.QtWidgets import (
     QComboBox, QHBoxLayout, QMessageBox, QTabWidget, QGridLayout, QFrame,
     QLCDNumber, QLineEdit
 )
-from PyQt5.QtGui import QIcon, QFont
-from PyQt5.QtCore import pyqtSignal, QObject, Qt
+from PyQt5.QtGui import QIcon
+from PyQt5.QtCore import pyqtSignal, QObject
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import serial
 import serial.tools.list_ports
 import os.path
+import re
 
 class Communicator(QObject):
     update_status = pyqtSignal(str)
+    first_block_signal = pyqtSignal()
 
 class GRBLController(QWidget):
     def __init__(self):
@@ -36,6 +38,7 @@ class GRBLController(QWidget):
         self.thread = None
         self.comm = Communicator()
         self.comm.update_status.connect(self.update_status)
+        self.comm.first_block_signal.connect(self.first_point_reached)
 
         self.init_ui()
         self.scan_ports()
@@ -57,8 +60,36 @@ class GRBLController(QWidget):
         """)
         main_layout.addWidget(self.status_label)
 
-        # Define a stylesheet for the buttons
-        disable_button_style = """
+        self.small_enabled_button_style = """
+            QPushButton {
+                font-size: 16px;           /* Font size */
+                font-weight: bold;         /* Bold text */
+                min-width: 30px;           /* Minimum width */
+                min-height: 30px;         /* Minimum height */
+            }
+        """
+
+        self.enabled_button_style = """
+            QPushButton {
+                background-color: #4CAF50;  /* Green background */
+                color: white;              /* White text */
+                border: none;              /* No border */
+                border-radius: 10px;       /* Rounded corners */
+                padding: 10px;            /* Padding */
+                font-size: 16px;           /* Font size */
+                font-weight: bold;         /* Bold text */
+                min-width: 60px;           /* Minimum width */
+                min-height: 60px;         /* Minimum height */
+            }
+            QPushButton:hover {
+                background-color: #45a049; /* Darker green on hover */
+            }
+            QPushButton:pressed {
+                background-color: #3d8b40; /* Even darker green when pressed */
+            }
+        """
+
+        self.disabled_button_style = """
             QPushButton {
                 background-color: #bfbfbf;  /* Gray background */
                 color: white;              /* White text */
@@ -80,7 +111,9 @@ class GRBLController(QWidget):
         # Refresh button
         refresh_button = QPushButton("Refresh")
         refresh_button.clicked.connect(self.scan_ports)
+        refresh_button.setStyleSheet(self.small_enabled_button_style)
         port_layout.addWidget(refresh_button)
+
 
         self.baud_selector = QComboBox()
         self.baud_selector.addItems(["9600", "115200", "250000"])
@@ -89,8 +122,15 @@ class GRBLController(QWidget):
 
         self.connect_button = QPushButton("Connect")
         self.connect_button.clicked.connect(self.toggle_connection)
+        self.connect_button.setStyleSheet(self.small_enabled_button_style)
         port_layout.addWidget(self.connect_button)
 
+
+        # Retrieve refresh button size
+        refresh_button_size = refresh_button.sizeHint()
+        refresh_button_height = refresh_button_size.height()
+        self.port_selector.setFixedHeight(refresh_button_height)
+        self.baud_selector.setFixedHeight(refresh_button_height)
         main_layout.addLayout(port_layout)
 
         # Tab widget
@@ -123,6 +163,7 @@ class GRBLController(QWidget):
         self.load_button = QPushButton("Load G-code File")
         self.load_button.setEnabled(False)
         self.load_button.clicked.connect(self.load_file)
+        self.load_button.setStyleSheet(self.small_enabled_button_style)
         self.main_tab_layout.addWidget(self.load_button)
 
         # File label (always visible)
@@ -134,18 +175,25 @@ class GRBLController(QWidget):
             padding: 10px;
             border-radius: 5px;
         """)
-        self.file_label.setFixedHeight(50)
+        
+        
+        # Retrieve Load button size
+        load_button_size = self.load_button.sizeHint()
+        load_button_height = load_button_size.height()
+        self.file_label.setFixedHeight(load_button_height)
         self.main_tab_layout.addWidget(self.file_label)
 
         settings_layout = QHBoxLayout()
-        settings_layout.addWidget(QLabel("First Block:"))
+        settings_layout.addWidget(QLabel("First Point:"))
         self.first_block_selector = QComboBox()
         self.first_block_selector.setEnabled(False)
+        self.first_block_selector.setFixedHeight(load_button_height)
         settings_layout.addWidget(self.first_block_selector)
 
-        settings_layout.addWidget(QLabel("Last Block:"))
+        settings_layout.addWidget(QLabel("Last Point:"))
         self.last_block_selector = QComboBox()
         self.last_block_selector.setEnabled(False)
+        self.last_block_selector.setFixedHeight(load_button_height)
         settings_layout.addWidget(self.last_block_selector)
 
         self.main_tab_layout.addLayout(settings_layout)
@@ -154,16 +202,19 @@ class GRBLController(QWidget):
         self.start_button = QPushButton("Start Sending")
         self.start_button.setEnabled(False)
         self.start_button.clicked.connect(self.start_sending)
+        self.start_button.setStyleSheet(self.small_enabled_button_style)
         button_layout.addWidget(self.start_button)
 
         self.pause_button = QPushButton("Pause")
         self.pause_button.setEnabled(False)
         self.pause_button.clicked.connect(self.toggle_pause)
+        self.pause_button.setStyleSheet(self.small_enabled_button_style)
         button_layout.addWidget(self.pause_button)
 
         self.stop_button = QPushButton("Stop")
         self.stop_button.setEnabled(False)
         self.stop_button.clicked.connect(self.stop_sending)
+        self.stop_button.setStyleSheet(self.small_enabled_button_style)
         button_layout.addWidget(self.stop_button)
 
         self.main_tab_layout.addLayout(button_layout)
@@ -186,27 +237,27 @@ class GRBLController(QWidget):
 
         # Jog Buttons
         self.btnYplus = QPushButton("Y+")
-        self.btnYplus.setStyleSheet(disable_button_style)
+        self.btnYplus.setStyleSheet(self.disabled_button_style)
         self.btnYplus.setEnabled(False)
         self.btnYplus.setToolTip("Move Y-axis in the positive direction")
 
         self.btnYminus = QPushButton("Y-")
-        self.btnYminus.setStyleSheet(disable_button_style)
+        self.btnYminus.setStyleSheet(self.disabled_button_style)
         self.btnYminus.setEnabled(False)
         self.btnYminus.setToolTip("Move Y-axis in the negative direction")
 
         self.btnXplus = QPushButton("X+")
-        self.btnXplus.setStyleSheet(disable_button_style)
+        self.btnXplus.setStyleSheet(self.disabled_button_style)
         self.btnXplus.setEnabled(False)
         self.btnXplus.setToolTip("Move X-axis in the positive direction")
 
         self.btnXminus = QPushButton("X-")
-        self.btnXminus.setStyleSheet(disable_button_style)
+        self.btnXminus.setStyleSheet(self.disabled_button_style)
         self.btnXminus.setEnabled(False)
         self.btnXminus.setToolTip("Move X-axis in the negative direction")
 
         self.btnHome = QPushButton("Home")
-        self.btnHome.setStyleSheet(disable_button_style)
+        self.btnHome.setStyleSheet(self.disabled_button_style)
         self.btnHome.setEnabled(False)
         self.btnHome.setToolTip("Move to the home position")
 
@@ -307,11 +358,52 @@ class GRBLController(QWidget):
         y_position_layout.addWidget(self.y_display)
         position_display_layout.addLayout(y_position_layout)
 
+        # Add the manual tab layout to the main layout
+
         position_display_widget.setLayout(position_display_layout)
         additional_layout.addWidget(position_display_widget)
 
         additional_controls_widget.setLayout(additional_layout)
 
+        # Add separator line
+        separator3 = QFrame()
+        separator3.setFrameShape(QFrame.HLine)
+        separator3.setFrameShadow(QFrame.Sunken)
+        additional_layout.addWidget(separator3)
+
+        button_layout = QHBoxLayout()
+        self.GoTo0 = QPushButton("Point 0")
+        self.GoTo0.clicked.connect(self.move_to_point0)
+        self.GoTo0.setStyleSheet(self.disabled_button_style)
+        self.GoTo0.setEnabled(False)
+        button_layout.addWidget(self.GoTo0)
+
+        self.GoToEnd = QPushButton("Ladder End")
+        self.GoToEnd.clicked.connect(self.move_to_ladder_end)
+        self.GoToEnd.setStyleSheet(self.disabled_button_style)
+        self.GoToEnd.setEnabled(False)
+        button_layout.addWidget(self.GoToEnd)
+
+        self.lowerSyringe = QPushButton("Lower Syringe")
+        self.lowerSyringe.setStyleSheet(self.disabled_button_style)
+        self.lowerSyringe.clicked.connect(self.lower_syringe)
+        self.lowerSyringe.setEnabled(False)
+        button_layout.addWidget(self.lowerSyringe)
+
+        self.raiseSyringe = QPushButton("Raise Syringe")
+        self.raiseSyringe.setStyleSheet(self.disabled_button_style)
+        self.raiseSyringe.clicked.connect(self.raise_syringe)
+        self.raiseSyringe.setEnabled(False)
+        button_layout.addWidget(self.raiseSyringe)
+
+        self.dispense = QPushButton("Dispense")
+        self.dispense.setStyleSheet(self.disabled_button_style)
+        self.dispense.clicked.connect(self.dispense_glue)
+        self.dispense.setEnabled(False)
+        button_layout.addWidget(self.dispense)
+
+        additional_layout.addLayout(button_layout)
+        
         # Add additional controls to the right side of the manual tab
         self.manual_tab_layout.addWidget(additional_controls_widget)
 
@@ -328,6 +420,75 @@ class GRBLController(QWidget):
         self.btnHome.clicked.connect(self.move_home)
 
         self.feed_rate_selector.textChanged.connect(self.update_feed_rate)
+
+    def move_to_point0(self):
+        self.sending = True
+        self.update_status("Moving to Point 0")
+        if self.coordinates[1:]:
+            x_vals, y_vals = zip(*self.coordinates[1:])
+            x0 = min(x_vals)
+            y0 = min(y_vals)
+        else:
+            QMessageBox.warning(self, "WARNING", "No coordinates loaded", QMessageBox.Abort)
+
+        command = f"G0 X{x0} Y{y0}"
+        if GRBLController.debug:
+            self.print_lines([command])
+        else:
+            self.send_lines([command])
+        self.sending = False
+
+    def move_to_ladder_end(self):
+        self.sending = True
+        self.update_status("Moving to Ladder End")
+        if self.coordinates[1:]:
+            # Get values excluding point 0,0
+            x_vals, y_vals = zip(*self.coordinates[1:])
+            xEnd = max(x_vals)
+            yEnd = min(y_vals)
+        else:
+            QMessageBox.warning(self, "WARNING", "No coordinates loaded", QMessageBox.Abort)
+
+        command = f"G0 X{xEnd} Y{yEnd}"
+        if GRBLController.debug:
+            self.print_lines([command])
+        else:
+            self.send_lines([command])
+        self.sending = False
+
+    def lower_syringe(self):
+        self.sending = True
+        self.update_status("Lowering Syringe")
+        command = "M4"
+        if GRBLController.debug:
+            self.print_lines([command])
+        else:
+            self.send_lines([command])
+        self.sending = False
+
+    def raise_syringe(self):
+        self.sending = True
+        self.update_status("Raising Syringe")
+        command = "M3"
+        if GRBLController.debug:
+            self.print_lines([command])
+        else:
+            self.send_lines([command])
+        self.sending = False
+
+    def dispense_glue(self):
+        self.sending = True
+        self.update_status("Dispensing Glue")
+        command1 = "M8"
+        command2 = "M9"
+        if GRBLController.debug:
+            self.print_lines([command1])
+            time.sleep(1)
+            self.print_lines([command2])
+        else:
+            self.send_lines([command1])
+            self.sleep(1)
+            self.send_lines([command2])
 
     def manual_move(self):
 
@@ -372,34 +533,21 @@ class GRBLController(QWidget):
             self.update_position(0, 0)  # Reset position to home
         self.sending = False
         
-        # Enable movement buttons
-        button_style = """
-        QPushButton {
-            background-color: #4CAF50;  /* Green background */
-            color: white;              /* White text */
-            border: none;              /* No border */
-            border-radius: 10px;       /* Rounded corners */
-            padding: 10px;            /* Padding */
-            font-size: 16px;           /* Font size */
-            font-weight: bold;         /* Bold text */
-            min-width: 60px;           /* Minimum width */
-            min-height: 60px;         /* Minimum height */
-        }
-        QPushButton:hover {
-            background-color: #45a049; /* Darker green on hover */
-        }
-        QPushButton:pressed {
-            background-color: #3d8b40; /* Even darker green when pressed */
-        }
-    """  
+
         self.btnYplus.setEnabled(True)
-        self.btnYplus.setStyleSheet(button_style)
+        self.btnYplus.setStyleSheet(self.enabled_button_style)
         self.btnYminus.setEnabled(True)
-        self.btnYminus.setStyleSheet(button_style)
+        self.btnYminus.setStyleSheet(self.enabled_button_style)
         self.btnXplus.setEnabled(True)
-        self.btnXplus.setStyleSheet(button_style)
+        self.btnXplus.setStyleSheet(self.enabled_button_style)
         self.btnXminus.setEnabled(True)
-        self.btnXminus.setStyleSheet(button_style)
+        self.btnXminus.setStyleSheet(self.enabled_button_style)
+
+        self.GoTo0.setEnabled(True)
+        self.GoTo0.setStyleSheet(self.enabled_button_style)
+
+        self.GoToLadderEnd.setEnabled(True)
+        self.GoToLadderEnd.setStyleSheet(self.enabled_button_style)
 
     def update_feed_rate(self, value):
         self.update_status(f"Setting feed rate to {value} mm/min")
@@ -410,7 +558,6 @@ class GRBLController(QWidget):
         else:
             self.send_lines([command])
             
-    
 
     def update_position(self, x_change, y_change):
         # Example logic to update the current position display
@@ -454,30 +601,18 @@ class GRBLController(QWidget):
                 self.connect_button.setText("Disconnect")
                 self.update_status(f"Connected to {port} at {baud} baud.")
                 self.load_button.setEnabled(True)
-
-                button_style = """
-                QPushButton {
-                    background-color: #4CAF50;  /* Green background */
-                    color: white;              /* White text */
-                    border: none;              /* No border */
-                    border-radius: 10px;       /* Rounded corners */
-                    padding: 10px;            /* Padding */
-                    font-size: 16px;           /* Font size */
-                    font-weight: bold;         /* Bold text */
-                    min-width: 60px;           /* Minimum width */
-                    min-height: 60px;         /* Minimum height */
-                }
-                QPushButton:hover {
-                    background-color: #45a049; /* Darker green on hover */
-                }
-                QPushButton:pressed {
-                    background-color: #3d8b40; /* Even darker green when pressed */
-                }
-            """
                
                 # Enable home control
                 self.btnHome.setEnabled(True)
-                self.btnHome.setStyleSheet(button_style)
+                self.btnHome.setStyleSheet(self.enabled_button_style)
+
+                # Enable syringe control
+                self.lowerSyringe.setEnabled(True)
+                self.lowerSyringe.setStyleSheet(self.enabled_button_style)
+                self.raiseSyringe.setEnabled(True)
+                self.raiseSyringe.setStyleSheet(self.enabled_button_style)
+                self.dispense.setEnabled(True)
+                self.dispense.setStyleSheet(self.enabled_button_style)
 
             except serial.SerialException as e:
                 self.update_status(f"Serial error: {e}")
@@ -503,6 +638,13 @@ class GRBLController(QWidget):
         self.btnYplus.setEnabled(False)
         self.btnXminus.setEnabled(False)
         self.btnXplus.setEnabled(False)
+
+        # Disable syringe control
+        self.lowerSyringe.setEnabled(False)
+        self.raiseSyringe.setEnabled(False)
+        self.dispense.setEnabled(False)
+        self.GoTo0.setEnabled(False)
+        self.GoToEnd.setEnabled(False)
         
         self.update_status("Disconnected from serial port.")
 
@@ -650,7 +792,6 @@ class GRBLController(QWidget):
         
         self.ax.set_xlabel("X Axis")
         self.ax.set_ylabel("Y Axis")
-        self.ax.set_title("G-code Toolpath Visualization")
         self.ax.grid(True)
         self.ax.set_aspect('equal', adjustable='box')
         
@@ -670,21 +811,30 @@ class GRBLController(QWidget):
 
             self.ax.set_xlabel("X Axis")
             self.ax.set_ylabel("Y Axis")
-            self.ax.set_title("G-code Toolpath Visualization (Glued)")
             self.ax.grid(True)
             self.ax.set_aspect('equal', adjustable='box')
 
         self.canvas.draw()
 
     def toggle_pause(self):
+        COLOR_PAUSED = "#FFEE8C"  # Light yellow
+
         if self.paused:
             self.paused = False
-            self.pause_button.setStyleSheet("") 
-            self.update_status("Resumed sending G-code.")
+            status_message = "Resumed sending G-code."
+            self.pause_button.setStyleSheet(self.small_enabled_button_style) 
         else:
             self.paused = True
-            self.pause_button.setStyleSheet("background-color : yellow") 
-            self.update_status("Paused sending G-code.")
+            status_message = "Paused sending G-code."
+            # Get the current style sheet
+            current_style = self.pause_button.styleSheet().split("\n")
+            # Reassemble the style sheet
+            new_style = "\n".join(current_style[:-2] + [f"background-color: {COLOR_PAUSED};}}"])
+
+            self.pause_button.setStyleSheet(new_style)
+
+        # Update status
+        self.update_status(status_message)
 
     def stop_sending(self):
         self.sending = False
@@ -692,7 +842,7 @@ class GRBLController(QWidget):
         self.start_button.setEnabled(True)
         self.update_status("G-code sending stopped.")
         self.paused = False
-        self.pause_button.setStyleSheet("")
+        self.pause_button.setStyleSheet(self.small_enabled_button_style)
         self.pause_button.setEnabled(False)
         self.stop_button.setEnabled(False)
 
@@ -731,8 +881,15 @@ class GRBLController(QWidget):
 
             # Send each command block in the toolpath
             for block in self.toolpath[first_block:last_block + 1]:
+
                 if not self.sending:
                     break
+
+                # If it's the first block, send signal to main thread
+                if block == self.toolpath[first_block]:
+                    self.update_status.emit("First point reached")
+                    #self.first_block_signal.emit()
+
                 while self.paused:
                     time.sleep(0.1)
                 # Send movement command
@@ -801,7 +958,20 @@ class GRBLController(QWidget):
 
     def update_status(self, message):
         self.status_label.setText(f"Status: {message}")
-        
+
+    def first_point_reached(self):
+        self.toggle_pause()
+
+        # Ask user for confirmation
+        reply = QMessageBox.question(
+            self, "Message", "First point reached. Continue?", QMessageBox.Yes, QMessageBox.No
+        )
+
+        if reply == QMessageBox.Yes:
+            self.toggle_pause()
+        else:
+            self.stop_sending()
+
     def closeEvent(self, event):
         # Ask for confirmation before closing the application
         reply = QMessageBox.question(

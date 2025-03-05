@@ -77,6 +77,11 @@ class GRBLController(QWidget):
         self.port_selector = QComboBox()
         port_layout.addWidget(self.port_selector)
 
+        # Refresh button
+        refresh_button = QPushButton("Refresh")
+        refresh_button.clicked.connect(self.scan_ports)
+        port_layout.addWidget(refresh_button)
+
         self.baud_selector = QComboBox()
         self.baud_selector.addItems(["9600", "115200", "250000"])
         self.baud_selector.setCurrentText("115200")

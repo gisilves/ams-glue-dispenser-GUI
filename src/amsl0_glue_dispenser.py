@@ -815,6 +815,26 @@ class GRBLController(QWidget):
         
         self.ax.set_xlabel("X Axis")
         self.ax.set_ylabel("Y Axis")
+
+        # Find all unique x and y values
+        unique_x = sorted(set(x_vals))
+        unique_y = sorted(set(y_vals))
+
+        col_num, row_num = 0, -1
+        # Add a line for each unique x and y value
+        for x in unique_x:
+            self.ax.plot([x, x], [max(y_vals), max(y_vals) + 50], color='lightgray', linewidth=0.5)
+            # Add text with column number
+            self.ax.annotate(f"{col_num}", (x, max(y_vals) + 50), xytext=(0, 10), textcoords='offset points', ha='center', va='bottom', arrowprops=dict(arrowstyle='->', color='lightgray'))
+            col_num += 1
+        
+        # Add a line for each unique y value
+        for y in unique_y:
+            self.ax.plot([max(x_vals), max(x_vals) + 50], [y, y], color='lightgray', linewidth=0.5)
+            # Add text with row number
+            self.ax.annotate(f"{row_num}", (max(x_vals) + 50, y), xytext=(-10, 0), textcoords='offset points', ha='right', va='center', arrowprops=dict(arrowstyle='->', color='lightgray'))
+            row_num += 1
+
         self.ax.grid(True)
         self.ax.set_aspect('equal', adjustable='box')
         

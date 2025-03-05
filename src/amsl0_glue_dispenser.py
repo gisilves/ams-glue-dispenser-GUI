@@ -438,7 +438,7 @@ class GRBLController(QWidget):
             self.disconnect_serial()
         else:
             self.init_serial()
-            self.send_lines('$X')
+            self.send_lines('$X') # Unlock the machine
 
     def init_serial(self):
         port = self.port_selector.currentData()
@@ -491,7 +491,19 @@ class GRBLController(QWidget):
             self.serial_port.close()
         self.connected = False
         self.connect_button.setText("Connect")
+        self.load_button.setEnabled(False)
         self.start_button.setEnabled(False)
+        self.pause_button.setEnabled(False)
+        self.stop_button.setEnabled(False)
+        self.first_block_selector.setEnabled(False)
+        self.last_block_selector.setEnabled(False)
+        self.file_label.setText("File: None")
+        self.btnHome.setEnabled(False)
+        self.btnYminus.setEnabled(False)
+        self.btnYplus.setEnabled(False)
+        self.btnXminus.setEnabled(False)
+        self.btnXplus.setEnabled(False)
+        
         self.update_status("Disconnected from serial port.")
 
     def load_file(self):

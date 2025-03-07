@@ -585,14 +585,14 @@ class GRBLController(QWidget):
         else:
             direction = -1
 
-        axis = "Y" if self.sender() in [self.btnYplus, self.btnYminus] else "X"
-        steps = int(self.x_steps_selector.text()) if axis == "X" else int(self.y_steps_selector.text())
+        axis = "Y" if self.sender() in [self.btnYplus, self.btnYminus] else 'X'
+        steps = int(self.x_steps_selector.text()) if axis == 'X' else int(self.y_steps_selector.text())
         
         current_x, current_y = self.get_current_position()  # TODO: Replace with actual position tracking
 
         # If movement results in value less than 0, clip it to a bit over 0
-        if (current_x + direction * steps if axis == "X" else current_y + direction * steps) < 0:
-            command = f"G00 {axis}{current_x + 0.001 if axis == "X" else current_y + 0.001}"
+        if (current_x + direction * steps if axis == 'X' else current_y + direction * steps) < 0:
+            command = f"G00 {axis}{current_x + 0.001 if axis == 'X' else current_y + 0.001}"
         else:
             command = f"G00 {axis}{direction * steps}"
 
@@ -606,7 +606,7 @@ class GRBLController(QWidget):
             print("Sending command to serial port")
             self.send_lines([command])
 
-        self.update_position(direction * steps if axis == "X" else 0, direction * steps if axis == "Y" else 0)
+        self.update_position(direction * steps if axis == 'X' else 0, direction * steps if axis == "Y" else 0)
         self.sending = False
 
     def move_home(self):

@@ -5,7 +5,7 @@ import re
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QPushButton, QFileDialog, QLabel, 
     QComboBox, QHBoxLayout, QMessageBox, QTabWidget, QGridLayout, QFrame,
-    QLCDNumber, QLineEdit
+    QLineEdit
 )
 from PyQt5.QtGui import QIcon
 from PyQt5.QtCore import pyqtSignal, QObject
@@ -15,9 +15,11 @@ from matplotlib.figure import Figure
 import serial
 import serial.tools.list_ports
 import os.path
+import heapq
+
 
 class Communicator(QObject):
-    update_status = pyqtSignal(str)
+    update_status_signal = pyqtSignal(str)
     first_block_signal = pyqtSignal()
 
 class GRBLController(QWidget):
@@ -56,10 +58,12 @@ class GRBLController(QWidget):
         self.connected = False
         self.coordinates = [(0, 0)]
         self.glued_coordinates = [(0, 0)]
+        self.x_position = 0
+        self.y_position = 0
         self.maximumTravel = 990
         self.thread = None
         self.comm = Communicator()
-        self.comm.update_status.connect(self.update_status)
+        self.comm.update_status_signal.connect(self.update_status)
         self.comm.first_block_signal.connect(self.first_point_reached)
         self.show_message_box_signal.connect(self.show_message_box)
         
@@ -69,6 +73,10 @@ class GRBLController(QWidget):
         self.debug = False
 
     def init_ui(self):
+        """
+            Initializes the UI components of the GRBLController widget, including the status label, tab widget, and various buttons and selectors.
+        """
+
         main_layout = QVBoxLayout()
 
         # Status label (always visible)
@@ -137,7 +145,6 @@ class GRBLController(QWidget):
         refresh_button.setStyleSheet(self.small_enabled_button_style)
         port_layout.addWidget(refresh_button)
 
-
         self.baud_selector = QComboBox()
         self.baud_selector.addItems(["9600", "115200", "250000"])
         self.baud_selector.setCurrentText("115200")
@@ -147,7 +154,6 @@ class GRBLController(QWidget):
         self.connect_button.clicked.connect(self.toggle_connection)
         self.connect_button.setStyleSheet(self.small_enabled_button_style)
         port_layout.addWidget(self.connect_button)
-
 
         # Retrieve refresh button size
         refresh_button_size = refresh_button.sizeHint()
@@ -251,47 +257,47 @@ class GRBLController(QWidget):
         self.manual_tab_layout = QHBoxLayout()
 
         self.manual_tab.setLayout(self.manual_tab_layout)
-        self.tabs.addTab(self.manual_tab, "Manual Control (Work In Progress)")
+        self.tabs.addTab(self.manual_tab, "Manual Control")
 
         # Left side: Jog controls
         jog_controls_widget = QWidget()
         jog_layout = QVBoxLayout()
-        grid = QGridLayout()
+        
 
-        # Jog Buttons
-        self.btnYplus = QPushButton("Y+")
-        self.btnYplus.setStyleSheet(self.disabled_button_style)
-        self.btnYplus.setEnabled(False)
-        self.btnYplus.setToolTip("Move Y-axis in the positive direction")
+        instructions = """
+            1. Power off motors and glue dispenser (you can use the power strip switch)\n
+            2. Select Arduino port and press connect\n
+            3. Power on motors and glue dispenser\n
+            4. Home the machine\n
+            5. For standard operation:\n
+	        \ta. If the syringe is new, press "Dispense" as many time as needed to purge\n
+	        \tb. Load desired GCode file in "Main Control" tab\n
+	        \tc. Press "Point 0" to move to first point of the glueing path\n
+	        \td. Press "Lower Syringe" and verify position on the ladder\n
+            \t\ti. If X coordinate is right, adjust Y position by moving the syringe in its holder (after raising it)\n
+		    \t\tii. If X coordinate is right, use manual controls to find the offset, correct GCode file and restart procedure\n
+		    \t\tiii. If needed, press "Ladder End" to move to last point of the line (without glue dispensing)\n
+	        \te. Press "Raise Syringe" and continue on "Main Control" tab\n\n\n
+            N.B. GUI might freeze during homing, don't touch it before it ends\n\n\n
+            Homing is needed to enable manual control
+            """
 
-        self.btnYminus = QPushButton("Y-")
-        self.btnYminus.setStyleSheet(self.disabled_button_style)
-        self.btnYminus.setEnabled(False)
-        self.btnYminus.setToolTip("Move Y-axis in the negative direction")
+        self.warning_label = QLabel(instructions.expandtabs(4))
+        
 
-        self.btnXplus = QPushButton("X+")
-        self.btnXplus.setStyleSheet(self.disabled_button_style)
-        self.btnXplus.setEnabled(False)
-        self.btnXplus.setToolTip("Move X-axis in the positive direction")
+        self.warning_label.setStyleSheet("""
+            font-size: 15px;
+            font-weight: bold;
+            border: 2px solid #2e3a47;
+            padding: 10px;
+            border-radius: 5px;
+        """)
 
-        self.btnXminus = QPushButton("X-")
-        self.btnXminus.setStyleSheet(self.disabled_button_style)
-        self.btnXminus.setEnabled(False)
-        self.btnXminus.setToolTip("Move X-axis in the negative direction")
+        # Set label size at half of the window height
+        label_height = self.height() // 2
 
-        self.btnHome = QPushButton("Home")
-        self.btnHome.setStyleSheet(self.disabled_button_style)
-        self.btnHome.setEnabled(False)
-        self.btnHome.setToolTip("Move to the home position")
-
-        # Add buttons to the grid
-        grid.addWidget(self.btnYplus, 0, 1)
-        grid.addWidget(self.btnYminus, 2, 1)
-        grid.addWidget(self.btnXplus, 1, 2)
-        grid.addWidget(self.btnXminus, 1, 0)
-        grid.addWidget(self.btnHome, 1, 1)
-
-        jog_layout.addLayout(grid)
+        jog_layout.addWidget(self.warning_label)
+        
         jog_controls_widget.setLayout(jog_layout)
 
         # Add jog controls to the left side of the manual tab
@@ -347,44 +353,36 @@ class GRBLController(QWidget):
         separator2.setFrameShadow(QFrame.Sunken)
         additional_layout.addWidget(separator2)
 
-        # Add current position display (7-segment style using QLCDNumber)
-        position_display_widget = QWidget()
-        position_display_layout = QHBoxLayout()
+        # Jog Buttons        
+        grid = QGridLayout()
+        self.btnYplus = QPushButton("Y+")
+        self.btnYplus.setStyleSheet(self.disabled_button_style)
+        self.btnYplus.setEnabled(False)
 
-        # X position display
-        x_position_layout = QHBoxLayout()
-        x_position_label = QLabel("Current X Position:")
-        x_position_layout.addWidget(x_position_label)
-        self.x_display = QLCDNumber()
-        self.x_display.setDigitCount(6)  # Display 6 digits (e.g., 000.00)
-        self.x_display.display("000.00")
-        self.x_display.setSegmentStyle(QLCDNumber.Flat)  # Flat segment style
-        self.x_display.setFixedHeight(50)
-        x_position_layout.addWidget(self.x_display)
-        position_display_layout.addLayout(x_position_layout)
+        self.btnYminus = QPushButton("Y-")
+        self.btnYminus.setStyleSheet(self.disabled_button_style)
+        self.btnYminus.setEnabled(False)
 
+        self.btnXplus = QPushButton("X+")
+        self.btnXplus.setStyleSheet(self.disabled_button_style)
+        self.btnXplus.setEnabled(False)
 
-        # Add spacer between X and Y displays
-        spacer = QWidget()
-        spacer.setFixedWidth(250)
-        position_display_layout.addWidget(spacer)
+        self.btnXminus = QPushButton("X-")
+        self.btnXminus.setStyleSheet(self.disabled_button_style)
+        self.btnXminus.setEnabled(False)
 
-        # Y position display
-        y_position_layout = QHBoxLayout()
-        y_position_label = QLabel("Current Y Position:")
-        y_position_layout.addWidget(y_position_label)
-        self.y_display = QLCDNumber()
-        self.y_display.setDigitCount(6)  # Display 6 digits (e.g., 000.00)
-        self.y_display.display("000.00")
-        self.y_display.setSegmentStyle(QLCDNumber.Flat)  # Flat segment style
-        self.y_display.setFixedHeight(50)
-        y_position_layout.addWidget(self.y_display)
-        position_display_layout.addLayout(y_position_layout)
+        self.btnHome = QPushButton("Home")
+        self.btnHome.setStyleSheet(self.disabled_button_style)
+        self.btnHome.setEnabled(False)
 
-        # Add the manual tab layout to the main layout
-
-        position_display_widget.setLayout(position_display_layout)
-        additional_layout.addWidget(position_display_widget)
+        # Add buttons to the grid
+        grid.addWidget(self.btnYplus, 0, 1)
+        grid.addWidget(self.btnYminus, 2, 1)
+        grid.addWidget(self.btnXplus, 1, 2)
+        grid.addWidget(self.btnXminus, 1, 0)
+        grid.addWidget(self.btnHome, 1, 1)
+        
+        additional_layout.addLayout(grid)
 
         additional_controls_widget.setLayout(additional_layout)
 
@@ -445,14 +443,26 @@ class GRBLController(QWidget):
         self.feed_rate_selector.textChanged.connect(self.update_feed_rate)
 
     def move_to_point0(self):
+        """
+        Move the toolhead to Point 0 in the toolpath.
+
+        If no coordinates are loaded, a warning message box is displayed. 
+        
+        If the application is in debug mode, the command is printed instead of sent.
+
+        Raises:
+            QMessageBox: If no coordinates are loaded, a warning is shown.
+        """
+
         self.sending = True
-        self.update_status("Moving to Point 0")
+        self.comm.update_status_signal.emit("Moving to Point 0")
         if self.coordinates[1:]:
-            x_vals, y_vals = zip(*self.coordinates[1:])
-            x0 = min(x_vals)
-            y0 = min(y_vals)
+            x_vals, y_vals = zip(*self.coordinates)
+            x0 = min(sorted(set(x_vals)))
+            y0 = heapq.nsmallest(3, sorted(set(y_vals)))[1]
         else:
             QMessageBox.warning(self, "WARNING", "No coordinates loaded", QMessageBox.Abort)
+            return
 
         command = f"G0 X{x0} Y{y0}"
         if GRBLController.debug:
@@ -462,15 +472,25 @@ class GRBLController(QWidget):
         self.sending = False
 
     def move_to_ladder_end(self):
+        """
+        Move the toolhead to the end of the ladder in the toolpath (on first line).
+
+        If no coordinates are loaded, a warning message box is displayed. 
+        
+        If the application is in debug mode, the command is printed instead of sent.
+
+        Raises:
+            QMessageBox: If no coordinates are loaded, a warning is shown.
+        """
         self.sending = True
-        self.update_status("Moving to Ladder End")
+        self.comm.update_status_signal.emit("Moving to Ladder End")
         if self.coordinates[1:]:
-            # Get values excluding point 0,0
-            x_vals, y_vals = zip(*self.coordinates[1:])
+            x_vals, y_vals = zip(*self.coordinates)
             xEnd = max(x_vals)
             yEnd = min(y_vals)
         else:
             QMessageBox.warning(self, "WARNING", "No coordinates loaded", QMessageBox.Abort)
+            return
 
         command = f"G0 X{xEnd} Y{yEnd}"
         if GRBLController.debug:
@@ -480,8 +500,18 @@ class GRBLController(QWidget):
         self.sending = False
 
     def lower_syringe(self):
+        """
+        Lower the syringe for glue deposition.
+
+        Attributes:
+            sending (bool): Temporarily set to True while the command is being sent.
+
+        Emits:
+            update_status_signal: Emitted with the message "Lowering Syringe".
+        """
+
         self.sending = True
-        self.update_status("Lowering Syringe")
+        self.comm.update_status_signal.emit("Lowering Syringe")
         command = "M4"
         if GRBLController.debug:
             self.print_lines([command])
@@ -490,8 +520,17 @@ class GRBLController(QWidget):
         self.sending = False
 
     def raise_syringe(self):
+        """
+        Raise the syringe for glue deposition.
+
+        Attributes:
+            sending (bool): Temporarily set to True while the command is being sent.
+
+        Emits:
+            update_status_signal: Emitted with the message "Raising Syringe".
+        """
         self.sending = True
-        self.update_status("Raising Syringe")
+        self.comm.update_status_signal.emit("Raising Syringe")
         command = "M3"
         if GRBLController.debug:
             self.print_lines([command])
@@ -500,8 +539,20 @@ class GRBLController(QWidget):
         self.sending = False
 
     def dispense_glue(self):
+        """
+        Dispense glue from the syringe as set on the glue dispenser.
+
+        Attributes:
+            sending (bool): Temporarily set to True while the command is being sent.
+
+        Emits:
+            update_status_signal: Emitted with the message "Dispensing Glue".
+
+        If the application is in debug mode, the commands are printed instead of sent.
+        """
+       
         self.sending = True
-        self.update_status("Dispensing Glue")
+        self.comm.update_status_signal.emit("Dispensing Glue")
         command1 = "M8"
         command2 = "M9"
         if GRBLController.debug:
@@ -510,11 +561,25 @@ class GRBLController(QWidget):
             self.print_lines([command2])
         else:
             self.send_lines([command1])
-            self.sleep(1)
+            time.sleep(1)
             self.send_lines([command2])
 
     def manual_move(self):
 
+        """
+        Perform a manual move of the toolhead along the X or Y axis.
+
+        Attributes:
+            sending (bool): Temporarily set to True while the command is being sent.
+
+        Emits:
+            update_status_signal: Emitted with a message indicating the direction and
+                distance of movement.
+
+        If the application is in debug mode, the command is printed instead of sent.
+
+        TODO: Replace with actual position tracking when available.
+        """
         if self.sender() == self.btnYplus or self.sender() == self.btnXplus:
             direction = +1
         else:
@@ -523,16 +588,16 @@ class GRBLController(QWidget):
         axis = "Y" if self.sender() in [self.btnYplus, self.btnYminus] else "X"
         steps = int(self.x_steps_selector.text()) if axis == "X" else int(self.y_steps_selector.text())
         
-        current_x, current_y = self.get_current_position()  # Replace with actual position tracking
+        current_x, current_y = self.get_current_position()  # TODO: Replace with actual position tracking
 
         # If movement results in value less than 0, clip it to a bit over 0
-        if {current_x + {direction * steps} if axis == "X" else current_y + {direction * steps}} < 0:
+        if (current_x + direction * steps if axis == "X" else current_y + direction * steps) < 0:
             command = f"G00 {axis}{current_x + 0.001 if axis == "X" else current_y + 0.001}"
         else:
             command = f"G00 {axis}{direction * steps}"
 
         self.sending = True
-        self.update_status(f"Moving {axis} by {direction * steps} mm")
+        self.comm.update_status_signal.emit(f"Moving {axis} by {direction * steps} mm")
 
         if GRBLController.debug:
             print("In debug mode, not sending command.")
@@ -545,18 +610,30 @@ class GRBLController(QWidget):
         self.sending = False
 
     def move_home(self):
-        self.update_status("Moving to home position")
+        """
+        Move the toolhead to its home position.
+
+        Emits:
+            update_status_signal: Emitted with a message indicating the action.
+
+        If the application is in debug mode, the command is printed instead of sent.
+
+        TODO: Replace with actual position tracking when available.
+        """
+        self.comm.update_status_signal.emit("Moving to home position")
         self.sending = True
         command = "$H"
         if GRBLController.debug:
             self.print_lines([command])
-            self.update_position(0, 0)  # Reset position to home
+            self.x_position = 0
+            self.y_position = 0  # Reset position to home
         else:
             self.send_lines([command])
-            self.update_position(0, 0)  # Reset position to home
+            self.x_position = 0
+            self.y_position = 0  # Reset position to home
         self.sending = False
-        
 
+        # Enable movement buttons
         self.btnYplus.setEnabled(True)
         self.btnYplus.setStyleSheet(self.enabled_button_style)
         self.btnYminus.setEnabled(True)
@@ -569,11 +646,30 @@ class GRBLController(QWidget):
         self.GoTo0.setEnabled(True)
         self.GoTo0.setStyleSheet(self.enabled_button_style)
 
-        self.GoToLadderEnd.setEnabled(True)
-        self.GoToLadderEnd.setStyleSheet(self.enabled_button_style)
+        self.GoToEnd.setEnabled(True)
+        self.GoToEnd.setStyleSheet(self.enabled_button_style)
+        
+        # Enable syringe control
+        self.lowerSyringe.setEnabled(True)
+        self.lowerSyringe.setStyleSheet(self.enabled_button_style)
+        self.raiseSyringe.setEnabled(True)
+        self.raiseSyringe.setStyleSheet(self.enabled_button_style)
+        self.dispense.setEnabled(True)
+        self.dispense.setStyleSheet(self.enabled_button_style)
 
     def update_feed_rate(self, value):
-        self.update_status(f"Setting feed rate to {value} mm/min")
+        """
+        Update the feed rate of the GRBL controller to the given value in mm/min.
+
+        Args:
+            value (int): The new feed rate in mm/min.
+
+        Emits:
+            update_status_signal: Emitted with a message indicating the new feed rate.
+
+        If the application is in debug mode, the command is printed instead of sent.
+        """
+        self.comm.update_status_signal.emit(f"Setting feed rate to {value} mm/min")
         command = f"F{value}"
         
         if GRBLController.debug:
@@ -581,36 +677,84 @@ class GRBLController(QWidget):
         else:
             self.send_lines([command])
             
-
     def update_position(self, x_change, y_change):
-        # Example logic to update the current position display
-        current_x, current_y = self.get_current_position()  # Replace with actual position tracking
-        new_x = current_x + x_change
-        new_y = current_y + y_change
-        self.x_display.display(f"{new_x:06.2f}")  # Update X display
-        self.y_display.display(f"{new_y:06.2f}")  # Update Y display
+        """
+        Update the current position of the toolhead based on the given changes in the X and Y directions.
 
+        Args:
+            x_change (float): The change to apply to the current X position.
+            y_change (float): The change to apply to the current Y position.
+
+        Updates:
+            x_position: The updated X position of the toolhead.
+            y_position: The updated Y position of the toolhead.
+        """
+
+        current_x, current_y = self.get_current_position()  # Replace with actual position tracking
+        self.x_position = current_x + x_change
+        self.y_position = current_y + y_change
+        
     def get_current_position(self):
         # Replace with actual logic to get the current position
-        # Read value from display for now
-        return float(self.x_display.value()), float(self.y_display.value())
+        # Read value from variable for now
+        """
+        Get the current position of the toolhead in the X and Y directions.
+
+        Returns:
+            tuple: A tuple of two floats representing the current X and Y positions of the toolhead.
+        """
+        return self.x_position, self.y_position
     
     def scan_ports(self):
+        """
+        Clear the serial port selector and re-populate it with the available serial ports on the system.
+
+        If no serial ports are found, a message is emitted to update the status label.
+        """
         self.port_selector.clear()
         ports = serial.tools.list_ports.comports()
         for port in ports:
             self.port_selector.addItem(f"{port.device} - {port.description}", port.device)
         if self.port_selector.count() == 0:
-            self.update_status("No serial ports found.")
+            self.comm.update_status_signal.emit("No serial ports found.")
 
     def toggle_connection(self):
+        """
+        Toggle the connection state of the GRBL controller.
+
+        If currently connected, disconnect from the serial port.
+        If not connected, initialize the serial connection and unlock the machine.
+
+        Emits:
+            update_status_signal: Emitted with a message indicating the connection status.
+        """
+
         if self.connected:
             self.disconnect_serial()
         else:
             self.init_serial()
             self.send_lines('$X') # Unlock the machine
+            # Switch to manual tab
+            self.tabs.setCurrentIndex(1)
 
     def init_serial(self):
+        """
+        Initialize the serial communication with the selected port and baud rate.
+
+        The method attempts to open a serial connection to the selected port 
+        with the specified baud rate. If successful, it sends initialization 
+        commands to the device, updates the connection status, and enables 
+        relevant UI controls. If no port is selected, or if there is an error 
+        opening the port, an appropriate status message is emitted.
+
+        Raises:
+            SerialException: If there is an error opening the serial port.
+
+        Emits:
+            update_status_signal: Emitted with a message indicating the connection 
+            status or any errors encountered.
+        """
+
         port = self.port_selector.currentData()
         baud = int(self.baud_selector.currentText())
         if port:
@@ -622,29 +766,32 @@ class GRBLController(QWidget):
                 self.serial_port.flushInput()
                 self.connected = True
                 self.connect_button.setText("Disconnect")
-                self.update_status(f"Connected to {port} at {baud} baud.")
+                self.comm.update_status_signal.emit(f"Connected to {port} at {baud} baud.")
                 self.load_button.setEnabled(True)
                
                 # Enable home control
                 self.btnHome.setEnabled(True)
                 self.btnHome.setStyleSheet(self.enabled_button_style)
 
-                # Enable syringe control
-                self.lowerSyringe.setEnabled(True)
-                self.lowerSyringe.setStyleSheet(self.enabled_button_style)
-                self.raiseSyringe.setEnabled(True)
-                self.raiseSyringe.setStyleSheet(self.enabled_button_style)
-                self.dispense.setEnabled(True)
-                self.dispense.setStyleSheet(self.enabled_button_style)
-
             except serial.SerialException as e:
-                self.update_status(f"Serial error: {e}")
+                self.comm.update_status_signal.emit(f"Serial error: {e}")
         else:
             if GRBLController.debug:
                 self.load_button.setEnabled(True)
-            self.update_status("No port selected.")
+            self.comm.update_status_signal.emit("No port selected.")
 
     def disconnect_serial(self):
+        """
+        Disconnect the serial port and update UI elements.
+
+        This method checks if the serial port is open and closes it if so. It then updates the 
+        connection status to reflect that the device is disconnected and disables various UI 
+        controls related to serial communication and tool operation.
+
+        Emits:
+            update_status_signal: Emitted with a message indicating the disconnection status.
+        """
+
         if self.serial_port and self.serial_port.is_open:
             self.serial_port.close()
         self.connected = False
@@ -669,15 +816,25 @@ class GRBLController(QWidget):
         self.GoTo0.setEnabled(False)
         self.GoToEnd.setEnabled(False)
         
-        self.update_status("Disconnected from serial port.")
+        self.comm.update_status_signal.emit("Disconnected from serial port.")
 
     def load_file(self):
+        """
+        Load a G-code file and parse its contents.
+
+        Opens a file dialog to select a G-code file to load. If a file is selected, 
+        it is parsed and the toolpath is plotted. The Start button is enabled if the 
+        device is connected.
+
+        Emits:
+            update_status_signal: Emitted with a message indicating the status of the file load operation.
+        """
         file_path, _ = QFileDialog.getOpenFileName(self, "Open G-code File", "", "G-code Files (*.gcode)")
         if file_path:
             self.coordinates = [(0, 0)]  # Reset coordinates
             self.glued_coordinates = [(0, 0)]
             self.parse_gcode(file_path)
-            self.update_status("G-code file loaded and parsed.")
+            self.comm.update_status_signal.emit("G-code file loaded and parsed.")
             if hasattr(self, 'ax'): # Clear plot if a file was previously loaded
                 self.ax.cla()
             self.plot_toolpath()  # Plot the original toolpath
@@ -695,6 +852,16 @@ class GRBLController(QWidget):
                 self.file_label.setText(f"File: {file_path}")
 
     def parse_gcode(self, file_path):
+        """
+        Parse a G-code file into a toolpath and extract the program initialization block and all
+        the glue deposition blocks.
+
+        The first and last block selectors are updated with the range of blocks in the toolpath.
+
+        :param file_path: Path to the G-code file to parse
+        :type file_path: str
+        :raises FileNotFoundError: If the specified file does not exist
+        """
         self.movement_type = []
         self.toolpath = []  # List of {'x': ..., 'y': ..., 'glue_commands': [...]}
         self.program_initialization = []  # Stores the init block
@@ -788,6 +955,13 @@ class GRBLController(QWidget):
             self.last_block_selector.setCurrentIndex(len(self.toolpath) - 1)
                 
     def match_pattern(self, line, pattern):
+        """
+        Extract X and Y coordinates and movement type from a line of G-code.
+
+        :param line: A line of G-code
+        :param pattern: A compiled regular expression pattern
+        :return: A tuple of (x, y, movement_type)
+        """
         x, y, movement_type = 0.0, 0.0, '0'
         
         matches = pattern.finditer(line.upper())
@@ -801,6 +975,22 @@ class GRBLController(QWidget):
         return x, y, movement_type
     
     def plot_toolpath(self, pointcolor='lightgray'):
+        """
+        Plot the toolpath on the canvas.
+
+        :param pointcolor: Color of the points to be plotted
+        :type pointcolor: str
+
+        This function creates a plot of the toolpath if it doesn't already exist.
+
+        Additionally, lines are added to the plot for each unique x and y value. The
+        line is drawn from the x or y value to the edge of the plot and labeled with
+        the column or row number.
+
+        Finally, the function checks if the last line is over the maximum allowed
+        travel and displays a warning if it is.
+        """
+
         # Ensure the background plot is created only once
         if not hasattr(self, 'ax'):
             self.ax = self.figure.add_subplot(111)
@@ -846,6 +1036,14 @@ class GRBLController(QWidget):
         self.canvas.draw()
 
     def plot_glued_toolpath(self):
+        """
+        Plot the glued toolpath in red (foreground) on the existing axes.
+        
+        It uses the same x and y limits as the original toolpath, and adds a label
+        to the legend.
+        
+        :param self: Instance of the class
+        """
         # No need to clear the axes, we just add to the existing one
         if self.glued_coordinates:
             x_vals, y_vals = zip(*self.glued_coordinates)
@@ -862,6 +1060,15 @@ class GRBLController(QWidget):
         self.canvas.draw()
 
     def toggle_pause(self):
+        """
+        Toggle the pause state of the G-code sender.
+
+        If currently paused, resume sending G-code.
+        If currently sending, pause the G-code sender.
+
+        :param self: Instance of the class
+        :return: None
+        """
         COLOR_PAUSED = "#FFEE8C"  # Light yellow
 
         if self.paused:
@@ -879,21 +1086,39 @@ class GRBLController(QWidget):
             self.pause_button.setStyleSheet(new_style)
 
         # Update status
-        self.update_status(status_message)
+        self.comm.update_status_signal.emit(status_message)
 
     def stop_sending(self):
+        """
+        Stop the sending of G-code commands.
+
+        This method sets the sending and paused flags to False and updates the UI elements 
+        to reflect that the G-code sending has been stopped. It enables the start button 
+        and disables the pause and stop buttons. Additionally, it emits a status signal 
+        indicating that the G-code sending has been stopped.
+        """
+
         self.sending = False
         self.paused = False
         self.start_button.setEnabled(True)
-        self.update_status("G-code sending stopped.")
+        self.comm.update_status_signal.emit("G-code sending stopped.")
         self.paused = False
         self.pause_button.setStyleSheet(self.small_enabled_button_style)
         self.pause_button.setEnabled(False)
         self.stop_button.setEnabled(False)
 
     def start_sending(self):
+        """
+        Start sending G-code commands.
+
+        This method sets the sending flag to True and paused flag to False, updates the UI elements 
+        to reflect that the G-code sending has started, and starts a new thread to send the G-code commands.
+        Additionally, it emits a status signal indicating that the G-code sending has started.
+
+        If not connected to the device, a status message is emitted indicating the disconnection.
+        """
         if not self.connected:
-            self.update_status("Not connected to the device.")
+            self.comm.update_status_signal.emit("Not connected to the device.")
             return
 
         self.sending = True
@@ -913,9 +1138,28 @@ class GRBLController(QWidget):
         self.thread.start()
 
     def send_gcode(self):
+        """
+        Send G-code to the connected device.
+
+        This function transmits G-code commands to the device, starting with the
+        program initialization block and followed by the movement and glue deposition
+        commands. It manages the sending state, updates the UI elements, and handles
+        any exceptions that occur during transmission. The function supports pausing
+        and resuming the transmission and emits signals for status updates.
+
+        Emits:
+            update_status_signal: Emitted with messages indicating the transmission status.
+            first_block_signal: Emitted when the first block in the toolpath is reached.
+
+        Raises:
+            SerialException: If a serial error occurs during transmission.
+            Exception: For any other errors encountered.
+
+        """
+
         try:
             # Send the program initialization block
-            self.comm.update_status.emit("Starting G-code transmission")
+            self.comm.update_status_signal.emit("Starting G-code transmission")
 
             if GRBLController.debug:
                 self.print_lines(self.program_initialization)
@@ -944,14 +1188,14 @@ class GRBLController(QWidget):
                     self.print_lines([f"G{block['movement_type']} X{block['x']} Y{block['y']}"])
                     if block == self.toolpath[first_block]:
                         print("First block reached, emitting signal")  # Debug print
-                        self.comm.update_status.emit("First point reached")
+                        self.comm.update_status_signal.emit("First point reached")
                         self.comm.first_block_signal.emit()  # Emit the signal
                         time.sleep(5)
                 else:
                     self.send_lines([f"G{block['movement_type']} X{block['x']} Y{block['y']}"])
                     if block == self.toolpath[first_block]:
-                        self.comm.update_status.emit("First point reached")
-                        self.first_block_signal.emit()  # Emit the signal
+                        self.comm.update_status_signal.emit("Moving to first point")
+                        self.comm.first_block_signal.emit()  # Emit the signal
   
 
                 # Send glue deposition commands
@@ -963,20 +1207,30 @@ class GRBLController(QWidget):
                 self.glued_coordinates.append((block['x'], block['y']))
                 self.plot_glued_toolpath()
 
-            self.comm.update_status.emit("Finished sending G-code.")
+            self.comm.update_status_signal.emit("Finished sending G-code.")
         except serial.SerialException as e:
-            self.comm.update_status.emit(f"Serial error: {e}")
+            self.comm.update_status_signal.emit(f"Serial error: {e}")
             self.sending = False
         except Exception as e:
-            self.comm.update_status.emit(f"Error: {e}")
+            self.comm.update_status_signal.emit(f"Error: {e}")
             self.sending = False
         finally:
-            self.comm.update_status.emit("Transmission stopped")
+            self.comm.update_status_signal.emit("Transmission stopped")
             self.start_button.setEnabled(True)
             self.pause_button.setEnabled(False)
             self.stop_button.setEnabled(False)
 
     def send_lines(self, lines):
+        """
+        Send a list of lines to the serial port, checking for pause and stop conditions
+        and reporting the lines sent and any errors encountered.
+
+        :param lines: List of lines to send
+        :type lines: list
+
+        :raises SerialException: If there is an error writing to the serial port
+        :raises Exception: If any other error occurs
+        """
         for line in lines:
             if not self.sending:
                 break
@@ -985,7 +1239,7 @@ class GRBLController(QWidget):
 
             try:
                 self.serial_port.write((line + '\n').encode())
-                self.comm.update_status.emit(f"Sent: {line}")
+                self.comm.update_status_signal.emit(f"Sent: {line}")
 
                 while True:
                     response = self.serial_port.readline().decode().strip()
@@ -994,33 +1248,60 @@ class GRBLController(QWidget):
                     time.sleep(0.1)
 
             except serial.SerialException as e:
-                self.comm.update_status.emit(f"Serial error while sending: {e}")
+                self.comm.update_status_signal.emit(f"Serial error while sending: {e}")
                 self.sending = False
                 break
             except Exception as e:
-                self.comm.update_status.emit(f"Error while sending: {e}")
+                self.comm.update_status_signal.emit(f"Error while sending: {e}")
                 self.sending = False
                 break
 
     def print_lines(self, lines):
+        """
+        Simulate sending a list of lines to the serial port, printing the lines instead.
+
+        This is used in debug mode to simulate sending G-code to the device.
+
+        :param lines: List of lines to "send"
+        :type lines: list
+
+        :raises Exception: If any error occurs
+        """
         for line in lines:
             if not self.sending:
                 break
             while self.paused:
                 time.sleep(0.1)
             print((line))
-            self.comm.update_status.emit(f"Sent: {line}")
+            self.comm.update_status_signal.emit(f"Sent: {line}")
             time.sleep(0.25)
 
     def update_status(self, message):
+        """
+        Update the status label with the given message.
+
+        :param message: Status message to display
+        :type message: str
+        """
         self.status_label.setText(f"Status: {message}")
 
     def first_point_reached(self):
+        """
+        Pause the transmission and show a message box when the first point in the toolpath is reached,
+        asking the user to confirm whether to continue with the transmission or not.
+
+        :raises Exception: If any error occurs
+        """
         self.toggle_pause()  # Pause the transmission
         self.show_message_box_signal.emit()  # Emit the signal to show the message box
     
     def show_message_box(self):
-        print("Showing message box")  # Debug print
+        """
+        Shows a message box when the first point in the toolpath is reached.
+
+        :raises Exception: If any error occurs
+        """
+
         reply = QMessageBox.question(
             self, "Message", "First point reached. Continue?", QMessageBox.Yes, QMessageBox.No
         )
@@ -1030,7 +1311,14 @@ class GRBLController(QWidget):
             self.stop_sending()  # Stop the transmission
 
     def closeEvent(self, event):
-        # Ask for confirmation before closing the application
+        """
+        Override of QWidget.closeEvent to ask for confirmation before closing the application.
+
+        If the user confirms, the event is accepted and the application is closed. If the user cancels, the event is ignored.
+
+        :param event: The close event
+        :type event: QCloseEvent
+        """
         reply = QMessageBox.question(
             self, "Message", "Are you sure you want to quit?", QMessageBox.Yes, QMessageBox.No
         )

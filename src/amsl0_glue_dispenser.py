@@ -973,7 +973,7 @@ class GRBLController(QWidget):
                 movement_type = match.group(1)
     
         return x, y, movement_type
-    
+
     def plot_toolpath(self, pointcolor='lightgray'):
         """
         Plot the toolpath on the canvas.
@@ -1028,11 +1028,9 @@ class GRBLController(QWidget):
         self.ax.grid(True)
         self.ax.set_aspect('equal', adjustable='box')
         
-
         # Check if the last line is over the maximum allowed travel
         if max(x_vals) >= float(self.maximumTravel):
             QMessageBox.warning(self, "WARNING", "The last line is over the maximum allowed travel", QMessageBox.Ok)
-
         self.canvas.draw()
 
     def plot_glued_toolpath(self):
@@ -1051,6 +1049,12 @@ class GRBLController(QWidget):
             # Plot the glued toolpath in red (foreground)
             self.ax.plot(x_vals, y_vals, linestyle='-', color='red', label='Glued Toolpath')  
             self.ax.scatter(x_vals, y_vals, color='red', s=50)
+            # Compute point index
+            point_idx = len(self.glued_coordinates) - 2 + int(self.first_block_selector.currentText())
+            # Remove last annotations
+            self.ax.texts[-1].remove()
+            # Add last point index to glued length near the point
+            self.ax.annotate(f"{point_idx}", (x_vals[-1], y_vals[-1]), xytext=(0, 10), textcoords='offset points', ha='center', va='bottom', arrowprops=dict(arrowstyle='->', color='red'))
 
             self.ax.set_xlabel("X Axis")
             self.ax.set_ylabel("Y Axis")
@@ -1106,6 +1110,8 @@ class GRBLController(QWidget):
         self.pause_button.setStyleSheet(self.small_enabled_button_style)
         self.pause_button.setEnabled(False)
         self.stop_button.setEnabled(False)
+        self.first_block_selector.setEnabled(True)
+        self.last_block_selector.setEnabled(True)
 
     def start_sending(self):
         """
@@ -1240,7 +1246,6 @@ class GRBLController(QWidget):
             try:
                 self.serial_port.write((line + '\n').encode())
                 self.comm.update_status_signal.emit(f"Sent: {line}")
-
                 while True:
                     response = self.serial_port.readline().decode().strip()
                     if response == 'ok':
@@ -1303,7 +1308,7 @@ class GRBLController(QWidget):
         """
 
         reply = QMessageBox.question(
-            self, "Message", "First point reached. Continue?", QMessageBox.Yes, QMessageBox.No
+            self, "Message", "Moving to first point. Continue?", QMessageBox.Yes, QMessageBox.No
         )
         if reply == QMessageBox.Yes:
             self.toggle_pause()  # Resume the transmission
